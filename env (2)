@@ -3,80 +3,37 @@
 # لا ترفع الملف ده على Git أبداً (موجود في .gitignore)
 # =====================================================
 
-# ---------- مطلوبة (Required) ----------
+# ---------- مطلوبة ----------
 
-# رابط قاعدة بيانات PostgreSQL  (غيّر USER و PASSWORD)
-DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/tecnoid"
+# رابط Neon: Neon -> Connect -> انسخ الـ Connection string (لازم ينتهي بـ ?sslmode=require)
+DATABASE_URL="postgresql://neondb_owner:npg_hMLOjeg2US0n@ep-nameless-base-b476p2tz-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
-# مفتاح تشفير الجلسات (لازم 16 حرف على الأقل) - تم توليده تلقائياً
+# مفتاح تشفير الجلسات
 AUTH_SECRET="UbJOAtP4cguhqIdRnLux6nnP4nh95FvFAx8L7mtTSSIHB5Lc+Eb9UaGJQC1883s/"
 
-# ---------- الجلسات والدخول (اختيارية - القيم دي هي الافتراضية) ----------
-
-# اسم كوكي الجلسة
+# ---------- الجلسات وتسجيل الدخول ----------
 SESSION_COOKIE_NAME="tecnoid_session"
-
-# مدة الجلسة بالدقايق عند عدم النشاط
 SESSION_TTL_MINUTES=60
-
-# أقصى مدة للجلسة بالساعات
 SESSION_ABSOLUTE_TTL_HOURS=24
-
-# حد محاولات تسجيل الدخول الفاشلة
 RATE_LIMIT_LOGIN_MAX=5
-
-# نافذة حساب المحاولات بالدقايق
 RATE_LIMIT_LOGIN_WINDOW_MINUTES=15
 
-# ---------- تخزين الملفات (Storage) ----------
-
-# local = تخزين على السيرفر | s3 = AWS S3/R2 | cloudinary = Cloudinary
+# ---------- تخزين الملفات (Cloudinary) ----------
 STORAGE_PROVIDER="cloudinary"
-
-# [local] مكان حفظ الملفات
-STORAGE_LOCAL_DIR="./storage/uploads"
-
-# المسار العام لعرض الملفات
 STORAGE_PUBLIC_PREFIX="/api/files"
 
-# [cloudinary] من Cloudinary Dashboard -> Settings -> API Keys
-CLOUDINARY_CLOUD_NAME=""
-CLOUDINARY_API_KEY=""
-CLOUDINARY_API_SECRET=""
-# اسم الفولدر داخل Cloudinary (اختياري)
+CLOUDINARY_CLOUD_NAME="xnjxjyge"
+CLOUDINARY_API_KEY="328432887897476"
+# الـ Secret بتاع مفتاح Tecno_ID من Cloudinary -> Settings -> API Keys
+CLOUDINARY_API_SECRET="TtNj_y24At67v6U177jqMwRDgc4"
 CLOUDINARY_FOLDER="tecnoid"
 
-# [s3] مطلوبة فقط لو STORAGE_PROVIDER="s3"
-STORAGE_BUCKET=""
-STORAGE_REGION=""
-STORAGE_ACCESS_KEY_ID=""
-STORAGE_SECRET_ACCESS_KEY=""
-
-# [s3] اتركه فاضي مع AWS الحقيقي، واملاه مع MinIO / R2 / DigitalOcean Spaces
-STORAGE_ENDPOINT=""
-
 # ---------- رفع الملفات ----------
-
-# أقصى حجم للصورة بالبايت (3MB)
+# 3MB للصور
 MAX_UPLOAD_IMAGE_BYTES=3145728
-
-# أقصى حجم للمستند بالبايت (4MB)
+# 4MB للمستندات
 MAX_UPLOAD_DOC_BYTES=4194304
 
 # ---------- الموظفين ----------
-
-# عدد دقايق يوم الشغل القياسي (480 = 8 ساعات)
+# 480 دقيقة = 8 ساعات
 STANDARD_WORK_MINUTES=480
-
-# ---------- اختيارية أخرى ----------
-
-# رابط Redis (للـ health check فقط) - اتركه فاضي لو مش مستخدم
-REDIS_URL=""
-
-# ---------- النسخ الاحتياطي (مذكورة في docs/BACKUP.md للـ cron/CI) ----------
-BACKUP_STORAGE_BUCKET=""
-BACKUP_RETENTION_DAYS=30
-
-# ---------- بيئة التشغيل ----------
-# Next.js بيضبطها لوحده (development / production)، مش لازم تحطها هنا
-# NODE_ENV="production"
