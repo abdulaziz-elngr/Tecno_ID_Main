@@ -369,7 +369,7 @@ export default function StudentPerformancePage() {
                         ))}
                       </ul>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                    <div className="grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
                       {[
                         [t("sp.col.exam"), s.examAvg],
                         [t("sp.col.homework"), s.homeworkPct],

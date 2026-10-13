@@ -67,7 +67,7 @@ function PaymentsView() {
   return (
     <div className="space-y-5">
       <PageHeader title={t("pay.title")} />
-      <div className="no-print flex gap-2" role="tablist">
+      <div className="no-print flex flex-wrap gap-2" role="tablist">
         {(["collect", "transactions"] as const).map((k) => (
           <button
             key={k}

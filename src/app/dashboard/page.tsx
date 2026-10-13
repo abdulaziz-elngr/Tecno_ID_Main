@@ -159,7 +159,7 @@ export default function DashboardPage() {
               const percent = g.capacity > 0 ? Math.min(100, Math.round((g.current / g.capacity) * 100)) : 0;
               return (
                 <div key={g.id} className="card p-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold">{g.name}</span>
                     {g.isFull && <Badge tone="danger">FULL</Badge>}
                   </div>
@@ -222,7 +222,7 @@ export default function DashboardPage() {
               <ul className="space-y-2 text-sm">
                 {data.upcomingExams.map((exam) => (
                   <li key={exam.id} className="flex items-center justify-between gap-3">
-                    <span>
+                    <span className="min-w-0">
                       <span className="font-medium">{exam.name}</span>{" "}
                       <span className="text-black/50 dark:text-white/50">
                         {exam.subject.name} · {exam.group.name}
@@ -244,7 +244,7 @@ export default function DashboardPage() {
             <ul className="space-y-2 text-sm">
               {data.recentActivity.map((entry) => (
                 <li key={entry.id} className="flex items-center justify-between gap-3">
-                  <span>
+                  <span className="min-w-0">
                     <span className="font-mono text-xs">{entry.action}</span>{" "}
                     <span className="text-black/50 dark:text-white/50">
                       {entry.actor?.fullName ?? "system"}

@@ -483,7 +483,7 @@ function ListSection({
       {empty ? (
         <p className="text-sm text-black/50 dark:text-white/50">{emptyText ?? "—"}</p>
       ) : (
-        <table className="w-full text-start text-sm">{children}</table>
+        <table className="w-full min-w-[560px] text-start text-sm">{children}</table>
       )}
     </section>
   );

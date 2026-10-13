@@ -126,7 +126,7 @@ export default function StudentProfilePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <button onClick={() => router.back()} className="text-sm text-tecno-gold-dark dark:text-tecno-gold">
           ← {t("common.back")}
         </button>
@@ -137,7 +137,7 @@ export default function StudentProfilePage() {
         </div>
       </div>
 
-      <div className="card flex flex-wrap items-center gap-4 p-6">
+      <div className="card flex flex-wrap items-center gap-4 p-4 sm:p-6">
         {student.photoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={student.photoUrl} alt={student.fullName} className="h-16 w-16 rounded-full object-cover" />
@@ -147,7 +147,7 @@ export default function StudentProfilePage() {
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-bold">{student.fullName}</h1>
+          <h1 className="break-words text-lg font-bold sm:text-xl">{student.fullName}</h1>
           <p className="mt-0.5 text-sm text-black/60 dark:text-white/60">
             <span className="font-mono">{student.studentCode}</span> ·{" "}
             {[student.stage?.name, student.grade?.name, student.group?.name].filter(Boolean).join(" · ")}
@@ -207,7 +207,7 @@ export default function StudentProfilePage() {
             <StatCard label="Make-up" value={attendance.summary.makeUp} />
           </div>
           <div className="card overflow-x-auto">
-            <table className="w-full text-start text-sm">
+            <table className="w-full min-w-[600px] text-start text-sm">
               <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
                 <tr>
                   <th className="p-3 text-start">{t("common.date")}</th>
@@ -250,7 +250,7 @@ export default function StudentProfilePage() {
 
       {tab === "sessions" && (
         <div className="card overflow-x-auto">
-          <table className="w-full text-start text-sm">
+          <table className="w-full min-w-[420px] text-start text-sm">
             <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
               <tr>
                 <th className="p-3 text-start">{t("common.date")}</th>
@@ -287,7 +287,7 @@ export default function StudentProfilePage() {
               <div>
                 <h3 className="mb-2 text-sm font-semibold">Subscriptions</h3>
                 <div className="card overflow-x-auto">
-                  <table className="w-full text-start text-sm">
+                  <table className="w-full min-w-[600px] text-start text-sm">
                     <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
                       <tr>
                         <th className="p-3 text-start">{t("payments.month")}</th>
@@ -316,7 +316,7 @@ export default function StudentProfilePage() {
               <div>
                 <h3 className="mb-2 text-sm font-semibold">{t("payments.title")}</h3>
                 <div className="card overflow-x-auto">
-                  <table className="w-full text-start text-sm">
+                  <table className="w-full min-w-[520px] text-start text-sm">
                     <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
                       <tr>
                         <th className="p-3 text-start">Receipt</th>
@@ -351,7 +351,7 @@ export default function StudentProfilePage() {
 
       {tab === "exams" && (
         <div className="card overflow-x-auto">
-          <table className="w-full text-start text-sm">
+          <table className="w-full min-w-[600px] text-start text-sm">
             <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
               <tr>
                 <th className="p-3 text-start">{t("common.date")}</th>
@@ -385,7 +385,7 @@ export default function StudentProfilePage() {
 
       {tab === "recitation" && (
         <div className="card overflow-x-auto">
-          <table className="w-full text-start text-sm">
+          <table className="w-full min-w-[520px] text-start text-sm">
             <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
               <tr>
                 <th className="p-3 text-start">{t("common.date")}</th>
@@ -422,7 +422,7 @@ export default function StudentProfilePage() {
           <div>
             <h3 className="mb-2 text-sm font-semibold">Assignments</h3>
             <div className="card overflow-x-auto">
-              <table className="w-full text-start text-sm">
+              <table className="w-full min-w-[520px] text-start text-sm">
                 <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
                   <tr>
                     <th className="p-3 text-start">Title</th>

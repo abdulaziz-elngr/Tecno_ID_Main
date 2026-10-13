@@ -366,7 +366,7 @@ export default function LessonFormationPage() {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-start text-sm">
+            <table className="w-full min-w-[640px] text-start text-sm">
               <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
                 <tr>
                   <th className="w-10 p-3" />

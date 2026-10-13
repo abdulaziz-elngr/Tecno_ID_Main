@@ -106,7 +106,7 @@ function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void 
       href={item.href}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
-      className={`block rounded-lg px-3 py-2 text-sm font-medium transition ${
+      className={`block rounded-lg px-3 py-2.5 text-sm font-medium transition lg:py-2 ${
         active
           ? "bg-tecno-gold/15 text-tecno-gold-dark dark:text-tecno-gold"
           : "text-black/70 hover:bg-black/5 dark:text-white/70 dark:hover:bg-white/5"
@@ -120,7 +120,7 @@ function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void 
 function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n();
   return (
-    <nav className="flex-1 space-y-4 overflow-y-auto p-3" aria-label="Main navigation">
+    <nav className="flex-1 space-y-4 overflow-y-auto overscroll-contain p-3" aria-label="Main navigation">
       <NavLink item={TOP} onNavigate={onNavigate} />
 
       {SECTIONS.map((section) => (
@@ -145,33 +145,66 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/**
+ * Event used by the Topbar hamburger to open the mobile/tablet drawer.
+ * (Kept as a DOM event so the two components stay decoupled.)
+ */
+export const OPEN_NAV_EVENT = "tecno:open-nav";
+
 export function Sidebar() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
+  // Close after navigating.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
 
+  // Topbar hamburger -> open drawer.
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_NAV_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_NAV_EVENT, onOpen);
+  }, []);
+
+  // While open: lock page scroll behind the drawer, close on Esc, and close
+  // automatically if the screen grows into the permanent-sidebar breakpoint
+  // (e.g. rotating a tablet) so scroll never stays locked.
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => {
+      if (mq.matches) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    mq.addEventListener("change", onChange);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+      mq.removeEventListener("change", onChange);
+    };
+  }, [open]);
+
   return (
     <>
-      {/* Mobile trigger (§51) */}
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Open navigation"
-        className="no-print fixed bottom-4 start-4 z-40 rounded-full bg-tecno-gold px-4 py-3 font-semibold text-tecno-ink shadow-lg md:hidden"
-      >
-        ☰
-      </button>
-
+      {/* Phones + tablets (< lg): slide-in drawer, opened from the Topbar (§51) */}
       {open && (
-        <div className="fixed inset-0 z-50 flex md:hidden" role="dialog" aria-modal="true">
+        <div className="no-print fixed inset-0 z-50 flex lg:hidden" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
-          <aside className="relative flex h-full w-72 flex-col bg-white dark:bg-surface-dark-muted">
+          <aside className="relative flex h-full w-72 max-w-[85vw] flex-col bg-white dark:bg-surface-dark-muted">
             <div className="flex items-center justify-between border-b border-black/5 p-4 dark:border-white/10">
               <Image src="/logo.png" alt="Tecno" width={110} height={55} priority />
-              <button type="button" onClick={() => setOpen(false)} aria-label="Close navigation" className="px-2 text-xl">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Close navigation"
+                className="rounded-lg px-3 py-1 text-2xl leading-none hover:bg-black/5 dark:hover:bg-white/10"
+              >
                 ×
               </button>
             </div>
@@ -180,7 +213,8 @@ export function Sidebar() {
         </div>
       )}
 
-      <aside className="no-print hidden w-64 shrink-0 border-e border-black/5 bg-white md:flex md:flex-col dark:border-white/10 dark:bg-surface-dark-muted">
+      {/* Laptops / desktops (>= lg): permanent sidebar, pinned while the page scrolls */}
+      <aside className="no-print hidden w-64 shrink-0 border-e border-black/5 bg-white lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col dark:border-white/10 dark:bg-surface-dark-muted">
         <div className="flex items-center gap-2 border-b border-black/5 p-4 dark:border-white/10">
           <Image src="/logo.png" alt="Tecno" width={110} height={55} priority />
         </div>

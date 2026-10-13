@@ -164,7 +164,7 @@ export default function SubscriptionsPage() {
         </Field>
       </div>
       {list.data && (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <StatCard label="Billed" value={formatMoneyClient(list.data.totals.billed)} />
           <StatCard label={t("pay.collected")} value={formatMoneyClient(list.data.totals.collected)} tone="positive" />
           <StatCard label={t("pay.outstandingTotal")} value={formatMoneyClient(list.data.totals.outstanding)} tone="negative" />

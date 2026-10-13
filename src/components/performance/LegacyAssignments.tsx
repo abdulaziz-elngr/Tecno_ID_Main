@@ -248,7 +248,7 @@ export function LegacyAssignments() {
                     <span className="font-medium">{s.student.fullName}</span>
                     <Badge tone={toneFor(d?.status ?? s.status)}>{d?.status ?? s.status}</Badge>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <select
                       className="input py-1 text-xs"
                       value={d?.status}

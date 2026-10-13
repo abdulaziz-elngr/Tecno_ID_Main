@@ -234,7 +234,7 @@ function ExamsInner() {
           <Field label={t("common.date")} required>
             {(id) => <input id={id} type="datetime-local" className="input" value={date} onChange={(e) => setDate(e.target.value)} required />}
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label={t("ex.col.max")} required>
               {(id) => (
                 <input

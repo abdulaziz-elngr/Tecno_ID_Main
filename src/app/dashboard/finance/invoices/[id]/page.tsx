@@ -75,7 +75,7 @@ export default function InvoiceDetailPage() {
       <ErrorNotice message={error} />
 
       <div className="print-sheet card mx-auto max-w-2xl space-y-6 p-8">
-        <div className="flex items-start justify-between border-b border-black/10 pb-4 dark:border-white/10">
+        <div className="flex items-start justify-between gap-3 border-b border-black/10 pb-4 dark:border-white/10">
           <div className="flex items-center gap-3">
             {center.logoUrl && (
               <Image src={center.logoUrl} alt={center.name} width={56} height={56} className="rounded-lg object-contain" unoptimized />
@@ -93,7 +93,7 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="grid grid-cols-1 gap-4 text-sm min-[420px]:grid-cols-2 [&>*]:min-w-0 [&>*]:break-words">
           <div>
             <p className="text-xs uppercase text-black/45 dark:text-white/45">{t("common.student")}</p>
             <p className="font-medium">{student.fullName}</p>
@@ -142,11 +142,11 @@ export default function InvoiceDetailPage() {
         </table>
 
         <div className="ms-auto max-w-xs space-y-1 text-sm">
-          <div className="flex justify-between">
+          <div className="flex justify-between gap-3">
             <span>{t("common.amount")}</span>
             <span>{formatMoneyClient(invoice.totalAmount, center.currency)}</span>
           </div>
-          <div className="flex justify-between">
+          <div className="flex justify-between gap-3">
             <span>Paid</span>
             <span>{formatMoneyClient(invoice.paidAmount, center.currency)}</span>
           </div>

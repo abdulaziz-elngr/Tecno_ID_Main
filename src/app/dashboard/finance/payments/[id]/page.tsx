@@ -60,7 +60,7 @@ function ReceiptView() {
 
   return (
     <div className="space-y-5">
-      <div className="no-print flex items-center justify-between">
+      <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <PageHeader title={t("receipt.title")} />
         <div className="flex gap-2">
           <button type="button" className="btn-secondary" onClick={() => router.push("/dashboard/finance/payments")}>

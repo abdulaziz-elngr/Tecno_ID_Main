@@ -31,14 +31,14 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-bold md:text-2xl">{title}</h1>
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 sm:mb-5">
+      <div className="min-w-0">
+        <h1 className="break-words text-lg font-bold sm:text-xl md:text-2xl">{title}</h1>
         {description && (
           <p className="mt-1 text-sm text-black/60 dark:text-white/60">{description}</p>
         )}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">{actions}</div>}
     </div>
   );
 }
@@ -64,11 +64,11 @@ export function StatCard({
           : "";
 
   return (
-    <div className="card p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
+    <div className="card min-w-0 p-3 sm:p-4">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-black/50 sm:text-xs dark:text-white/50">
         {label}
       </p>
-      <p className={`mt-2 text-2xl font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1.5 break-words text-xl font-bold sm:mt-2 sm:text-2xl ${toneClass}`}>{value}</p>
       {hint && <p className="mt-1 text-xs text-black/50 dark:text-white/50">{hint}</p>}
     </div>
   );
@@ -164,7 +164,7 @@ export function Pager({
 }) {
   if (totalPages <= 1) return null;
   return (
-    <div className="mt-4 flex items-center gap-2">
+    <div className="mt-4 flex flex-wrap items-center gap-2">
       <button
         type="button"
         disabled={page <= 1}
@@ -244,7 +244,13 @@ export function Modal({
       if (event.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Stop the page behind the dialog from scrolling (important on phones).
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -256,9 +262,9 @@ export function Modal({
       aria-label={title}
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
     >
-      <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:max-w-lg sm:rounded-2xl dark:bg-surface-dark-muted">
+      <div className="max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-2xl bg-white p-4 shadow-xl sm:max-w-lg sm:rounded-2xl sm:p-5 dark:bg-surface-dark-muted">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="min-w-0 break-words text-lg font-semibold">{title}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -269,7 +275,11 @@ export function Modal({
           </button>
         </div>
         <div className="space-y-3">{children}</div>
-        {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+        {footer && (
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end [&>*]:w-full sm:[&>*]:w-auto">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -383,11 +393,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div aria-live="polite" className="pointer-events-none fixed bottom-4 end-4 z-[60] flex flex-col gap-2">
+      <div aria-live="polite" className="pointer-events-none fixed bottom-4 end-4 start-4 z-[60] flex flex-col items-end gap-2 sm:start-auto sm:max-w-sm">
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`pointer-events-auto rounded-lg px-4 py-2 text-sm shadow-lg ${
+            className={`pointer-events-auto max-w-full break-words rounded-lg px-4 py-2 text-sm shadow-lg ${
               toast.tone === "success"
                 ? "bg-emerald-600 text-white"
                 : "bg-red-600 text-white"

@@ -354,7 +354,7 @@ export default function GroupDetailPage() {
       </div>
 
       <div className="card overflow-x-auto">
-        <table className="w-full text-start text-sm">
+        <table className="w-full min-w-[640px] text-start text-sm">
           <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
             <tr>
               <th className="p-3 text-start">{t("students.id")}</th>
@@ -411,7 +411,7 @@ export default function GroupDetailPage() {
               </select>
             )}
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Start time" required>
               {(id) => (
                 <input

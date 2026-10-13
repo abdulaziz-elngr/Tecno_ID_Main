@@ -1,6 +1,5 @@
 import { mkdir, readFile as fsReadFile, writeFile } from "fs/promises";
 import path from "path";
-import { createHash } from "crypto";
 import {
   S3Client,
   PutObjectCommand,
@@ -17,10 +16,6 @@ import {
  *               production on Vercel, whose function filesystem is
  *               read-only/ephemeral outside of /tmp and never persists
  *               uploads across invocations or deployments.
- *   - "cloudinary" — Cloudinary (raw resource type, signed uploads).
- *               Needs CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and
- *               CLOUDINARY_API_SECRET. Files are only ever served to the
- *               browser through the authenticated /api/files proxy.
  *   - "local" — writes to STORAGE_LOCAL_DIR on disk. Fine for local
  *               development; must NOT be used in a Vercel production
  *               deployment.
@@ -37,83 +32,10 @@ export class StorageError extends Error {
   }
 }
 
-function provider(): "s3" | "cloudinary" | "local" {
+function provider(): "s3" | "local" {
   const raw = (process.env.STORAGE_PROVIDER || "local").toLowerCase();
   if (raw === "s3") return "s3";
-  if (raw === "cloudinary") return "cloudinary";
   return "local";
-}
-
-// ---------------------------------------------------------------------
-// Cloudinary driver (no SDK needed: signed REST upload + plain fetch)
-// ---------------------------------------------------------------------
-
-function cloudinaryConfig() {
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  if (!cloudName || !apiKey || !apiSecret) {
-    throw new StorageError(
-      "STORAGE_PROVIDER=cloudinary requires CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET to be set."
-    );
-  }
-  const folder = (process.env.CLOUDINARY_FOLDER || "tecnoid").replace(/^\/+|\/+$/g, "");
-  return { cloudName, apiKey, apiSecret, folder };
-}
-
-function cloudinaryPublicId(storageKey: string, folder: string): string {
-  // storageKey is server-generated ("YYYY-MM/<uuid>.<ext>"); still refuse
-  // anything that could escape the folder.
-  if (storageKey.includes("..") || storageKey.startsWith("/")) {
-    throw new StorageError("Invalid storage path.");
-  }
-  return folder ? `${folder}/${storageKey}` : storageKey;
-}
-
-async function cloudinaryStore(storageKey: string, bytes: Uint8Array): Promise<void> {
-  const { cloudName, apiKey, apiSecret, folder } = cloudinaryConfig();
-  const publicId = cloudinaryPublicId(storageKey, folder);
-  const timestamp = String(Math.floor(Date.now() / 1000));
-
-  // Signature = sha1("public_id=...&timestamp=..." + api_secret), params sorted.
-  const signature = createHash("sha1")
-    .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
-    .digest("hex");
-
-  const form = new FormData();
-  form.append("file", new Blob([bytes as BlobPart]), storageKey.split("/").pop() || "file");
-  form.append("api_key", apiKey);
-  form.append("timestamp", timestamp);
-  form.append("public_id", publicId);
-  form.append("signature", signature);
-
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`, {
-    method: "POST",
-    body: form
-  });
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const data = (await response.json()) as { error?: { message?: string } };
-      detail = data?.error?.message ? `: ${data.error.message}` : "";
-    } catch {
-      /* ignore body parse errors */
-    }
-    throw new StorageError(`Cloudinary upload failed (${response.status})${detail}`);
-  }
-}
-
-async function cloudinaryRead(storageKey: string): Promise<Uint8Array> {
-  const { cloudName, folder } = cloudinaryConfig();
-  const publicId = cloudinaryPublicId(storageKey, folder);
-  const response = await fetch(
-    `https://res.cloudinary.com/${cloudName}/raw/upload/${publicId}`,
-    { cache: "no-store" }
-  );
-  if (!response.ok) {
-    throw new StorageError(`Cloudinary read failed (${response.status}).`);
-  }
-  return new Uint8Array(await response.arrayBuffer());
 }
 
 // Resolved to an absolute, normalized path so a relative STORAGE_LOCAL_DIR
@@ -186,11 +108,6 @@ export async function storeObject(
   bytes: Uint8Array,
   contentType: string
 ): Promise<void> {
-  if (provider() === "cloudinary") {
-    await cloudinaryStore(storageKey, bytes);
-    return;
-  }
-
   if (provider() === "s3") {
     await s3Client().send(
       new PutObjectCommand({
@@ -210,10 +127,6 @@ export async function storeObject(
 
 /** Reads back the bytes previously written under `storageKey`. */
 export async function readObject(storageKey: string): Promise<Uint8Array> {
-  if (provider() === "cloudinary") {
-    return cloudinaryRead(storageKey);
-  }
-
   if (provider() === "s3") {
     const response = await s3Client().send(
       new GetObjectCommand({ Bucket: bucketName(), Key: storageKey })

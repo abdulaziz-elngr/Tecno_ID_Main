@@ -544,11 +544,11 @@ export default function ScannerPage() {
                   <span className="font-mono text-xs text-black/50 dark:text-white/50">{result.student?.studentCode}</span>
                 </p>
                 <dl className="mt-2 space-y-1 text-sm">
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-2">
                     <dt className="text-black/55 dark:text-white/55">{t("scanner.currentGroup")}</dt>
                     <dd className="font-medium">{result.currentGroup?.name ?? "—"}</dd>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-2">
                     <dt className="text-black/55 dark:text-white/55">{t("scanner.selectedGroup")}</dt>
                     <dd className="font-medium">{result.selectedGroup?.name ?? "—"}</dd>
                   </div>

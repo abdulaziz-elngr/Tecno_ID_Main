@@ -42,12 +42,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface-light-muted p-4 dark:bg-surface-dark">
-      <div className="absolute top-4 end-4">
+    <div className="flex min-h-screen flex-col bg-surface-light-muted dark:bg-surface-dark">
+      {/* In normal flow (not absolute) so it can never overlap the card on short/small screens */}
+      <div className="flex justify-end p-3 sm:p-4">
         <LanguageThemeSwitcher />
       </div>
 
-      <div className="card w-full max-w-sm p-8">
+      <div className="flex flex-1 items-center justify-center p-4 pt-0 sm:pt-4">
+      <div className="card w-full max-w-sm p-5 sm:p-8">
         <div className="mb-6 flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="Tecno" width={140} height={70} priority />
           <h1 className="text-lg font-bold">{t("login.title")}</h1>
@@ -95,6 +97,7 @@ export default function LoginPage() {
             {loading ? t("common.loading") : t("login.submit")}
           </button>
         </form>
+      </div>
       </div>
     </div>
   );

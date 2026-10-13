@@ -397,7 +397,7 @@ export default function GroupsPage() {
                           className="flex flex-col rounded-xl border border-black/10 p-3 transition hover:border-tecno-gold dark:border-white/10"
                         >
                           <Link href={`/dashboard/academic/groups/${g.id}`} className="block flex-1">
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-2">
                               <span className="font-semibold">{g.name}</span>
                               {!g.isActive ? (
                                 <Badge tone="neutral">{t("common.archived")}</Badge>

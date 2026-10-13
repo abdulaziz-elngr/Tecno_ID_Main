@@ -413,7 +413,7 @@ function StudentsPage() {
       <ErrorNotice message={error} />
 
       <div className="card overflow-x-auto">
-        <table className="w-full text-start text-sm">
+        <table className="w-full min-w-[860px] text-start text-sm">
           <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
             <tr>
               <th className="p-3 text-start">{t("students.id")}</th>

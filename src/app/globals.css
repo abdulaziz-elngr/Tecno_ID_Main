@@ -10,9 +10,46 @@
   color-scheme: dark;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   @apply bg-surface-light text-tecno-ink dark:bg-surface-dark dark:text-white;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  /* Responsive safety net: long words/URLs wrap instead of widening the page,
+     and a stray wide element can never create a sideways page scroll. */
+  overflow-wrap: break-word;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+/* Hide the scrollbar on horizontally scrollable tab strips (still scrollable). */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Phones: iOS Safari zooms the whole page when a focused field is < 16px.
+   Keep fields at 16px on small screens so the layout never jumps. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Touch screens: comfortable minimum tap target for buttons. */
+@media (pointer: coarse) {
+  .btn-primary,
+  .btn-secondary {
+    min-height: 2.5rem;
+  }
 }
 
 /* Logical-direction-aware focus ring for accessibility */
