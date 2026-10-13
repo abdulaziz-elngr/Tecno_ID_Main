@@ -1,5 +1,5 @@
 /**
- * Attendance business rules (spec §14, §17, §61).
+ * Attendance business rules (spec §9–§13).
  *
  * The decision logic is a PURE function so it can be unit-tested
  * exhaustively without a database. `src/app/api/attendance/scan/route.ts`
@@ -8,52 +8,40 @@
  *
  * Rules enforced here:
  *   Rule 1  A student cannot have duplicate attendance for one session.
- *   Rule 2  A student cannot attend an unauthorized group.
- *   Rule 3  Make-up attendance must follow the configured rules.
- *   Rule 9  Room/group capacity cannot be exceeded.
+ *   Rule 2  A student scanning at a group that is not their own group
+ *           always requires an explicit human decision (Accept make-up
+ *           / Reject) — evaluateAttendance() never auto-approves this,
+ *           it returns `needsConfirmation: true` until the caller
+ *           passes `confirmMakeUp: true` (i.e. the admin clicked
+ *           "Accept make-up attendance" in the UI).
+ *   Rule 3  Group capacity cannot be exceeded (unless overridden).
  */
 
 export type AttendanceTypeValue = "REGULAR" | "MAKE_UP" | "LATE" | "EXCUSED" | "ABSENT";
 
 export interface MakeUpRules {
-  /** The make-up group must teach the same subject as the student's primary group. */
-  requireSameSubject: boolean;
-  /** The make-up group must target the same academic level as the student. */
-  requireSameLevel: boolean;
   /** Refuse if the session already has as many attendees as the group capacity. */
   respectCapacity: boolean;
   /** Maximum make-up sessions a student may take within the calendar month. 0 = unlimited. */
   maxMakeUpsPerMonth: number;
-  /** Make-up must happen within N days of the missed session. 0 = no limit. */
+  /** Make-up must happen within N days of the missed session, if one is known. 0 = no limit. */
   maxDaysAfterOrigin: number;
-  /** Require an explicit administrator approval before recording a make-up. */
-  requireApproval: boolean;
 }
 
 export const DEFAULT_MAKEUP_RULES: MakeUpRules = {
-  requireSameSubject: true,
-  requireSameLevel: true,
   respectCapacity: true,
-  maxMakeUpsPerMonth: 4,
-  maxDaysAfterOrigin: 14,
-  requireApproval: false
+  maxMakeUpsPerMonth: 0,
+  maxDaysAfterOrigin: 0
 };
 
 /** Minutes after the session start time after which a student is marked LATE. */
 export const DEFAULT_LATE_THRESHOLD_MINUTES = 15;
 
 export interface AttendanceFacts {
-  /** Group ids the student is enrolled in (any subject). */
-  enrolledGroupIds: string[];
-  /** The student's primary group for the subject of the scanned session, if any. */
-  primaryGroupIdForSubject: string | null;
+  /** The student's own (home) group id. */
+  studentGroupId: string;
   /** The group the scanned session belongs to. */
   sessionGroupId: string;
-  sessionSubjectId: string;
-  sessionAcademicLevelId: string;
-  /** Subject of the student's primary group (null if none). */
-  primarySubjectId: string | null;
-  studentAcademicLevelId: string | null;
   groupCapacity: number;
   currentAttendeeCount: number;
   /** Already-recorded attendance for this exact session (Rule 1). */
@@ -62,11 +50,24 @@ export interface AttendanceFacts {
   makeUpsThisMonth: number;
   /** Days between the missed session and this one, if an origin session is known. */
   daysSinceOriginSession: number | null;
-  /** True when an operator with `attendance.makeup.approve` authorised this scan. */
-  hasApproval: boolean;
+  /**
+   * True only when the operator has already clicked "Accept make-up
+   * attendance" for this exact scan (the frontend re-sends the scan
+   * with this flag set after the confirmation dialog). Until then a
+   * cross-group scan always comes back as `needsConfirmation`.
+   */
+  confirmMakeUp: boolean;
+  /** Whether an override for a full group has been explicitly granted by an admin. */
+  overrideCapacity?: boolean;
   /** Minutes elapsed since the session's scheduled start (can be negative). */
   minutesAfterStart: number;
   sessionStatus: "SCHEDULED" | "OPEN" | "COMPLETED" | "CANCELLED";
+  /**
+   * Stage 2: lessons that belong to a monthly plan are never opened as a side
+   * effect of a scan — an operator must open them explicitly (so the lesson
+   * order can't be skipped). Legacy sessions keep the old "first scan opens it".
+   */
+  requiresExplicitOpen?: boolean;
   studentStatus: "ACTIVE" | "INACTIVE" | "SUSPENDED" | "GRADUATED";
   lateThresholdMinutes?: number;
 }
@@ -78,16 +79,17 @@ export type AttendanceDecisionCode =
   | "DUPLICATE"
   | "SESSION_CANCELLED"
   | "SESSION_COMPLETED"
+  | "LESSON_NOT_OPEN"
   | "STUDENT_NOT_ACTIVE"
-  | "NOT_ENROLLED_SUBJECT_MISMATCH"
-  | "LEVEL_MISMATCH"
+  | "DIFFERENT_GROUP"
   | "CAPACITY_FULL"
   | "MAKEUP_LIMIT_REACHED"
-  | "MAKEUP_WINDOW_EXPIRED"
-  | "APPROVAL_REQUIRED";
+  | "MAKEUP_WINDOW_EXPIRED";
 
 export interface AttendanceDecision {
   allowed: boolean;
+  /** True when the caller must show the "Student belongs to another group" dialog and re-submit with confirmMakeUp. */
+  needsConfirmation: boolean;
   type: AttendanceTypeValue | null;
   code: AttendanceDecisionCode;
   /** Machine-neutral English sentence; the UI maps `code` to a localized string. */
@@ -111,20 +113,26 @@ export function evaluateAttendance(
   if (facts.sessionStatus === "COMPLETED") {
     return deny("SESSION_COMPLETED", "This session is already closed for attendance.");
   }
+  if (facts.requiresExplicitOpen && facts.sessionStatus !== "OPEN") {
+    return deny("LESSON_NOT_OPEN", "This lesson is not open. Open the lesson before recording attendance.");
+  }
   if (facts.studentStatus !== "ACTIVE") {
     return deny("STUDENT_NOT_ACTIVE", "This student account is not active.");
   }
 
-  const isEnrolledInSessionGroup = facts.enrolledGroupIds.includes(facts.sessionGroupId);
+  const isOwnGroup = facts.studentGroupId === facts.sessionGroupId;
+  const capacityFull =
+    rules.respectCapacity && !facts.overrideCapacity && facts.currentAttendeeCount >= facts.groupCapacity;
 
   // --- Path A: the student belongs to this group. Normal attendance. ---
-  if (isEnrolledInSessionGroup) {
-    if (rules.respectCapacity && facts.currentAttendeeCount >= facts.groupCapacity) {
+  if (isOwnGroup) {
+    if (capacityFull) {
       return deny("CAPACITY_FULL", "This session has reached its capacity.");
     }
     const late = facts.minutesAfterStart > lateThreshold;
     return {
       allowed: true,
+      needsConfirmation: false,
       type: late ? "LATE" : "REGULAR",
       code: late ? "OK_LATE" : "OK_REGULAR",
       message: late ? "Attendance recorded (late)." : "Attendance recorded.",
@@ -132,31 +140,21 @@ export function evaluateAttendance(
     };
   }
 
-  // --- Path B: make-up attendance in a group the student is not enrolled in ---
-  // Rule 2: never a free-for-all — every rule below must pass.
-  if (rules.requireSameSubject) {
-    if (!facts.primarySubjectId || facts.primarySubjectId !== facts.sessionSubjectId) {
-      return deny(
-        "NOT_ENROLLED_SUBJECT_MISMATCH",
-        "This student is not enrolled in this group, and it does not match their subject."
-      );
-    }
-  } else if (!facts.primaryGroupIdForSubject) {
-    return deny(
-      "NOT_ENROLLED_SUBJECT_MISMATCH",
-      "This student has no primary group, so make-up attendance cannot be validated."
-    );
+  // --- Path B: the student belongs to a DIFFERENT group (spec §10). ---
+  // Every cross-group scan requires an explicit human decision — we
+  // never silently approve it, regardless of any rule below.
+  if (!facts.confirmMakeUp) {
+    return {
+      allowed: false,
+      needsConfirmation: true,
+      type: null,
+      code: "DIFFERENT_GROUP",
+      message: "Student belongs to another group.",
+      isMakeUp: false
+    };
   }
 
-  if (
-    rules.requireSameLevel &&
-    facts.studentAcademicLevelId &&
-    facts.studentAcademicLevelId !== facts.sessionAcademicLevelId
-  ) {
-    return deny("LEVEL_MISMATCH", "This group targets a different academic level.");
-  }
-
-  if (rules.respectCapacity && facts.currentAttendeeCount >= facts.groupCapacity) {
+  if (capacityFull) {
     return deny("CAPACITY_FULL", "This session has reached its capacity.");
   }
 
@@ -178,12 +176,9 @@ export function evaluateAttendance(
     );
   }
 
-  if (rules.requireApproval && !facts.hasApproval) {
-    return deny("APPROVAL_REQUIRED", "Administrator approval is required for this make-up session.");
-  }
-
   return {
     allowed: true,
+    needsConfirmation: false,
     type: "MAKE_UP",
     code: "OK_MAKE_UP",
     message: "Make-up attendance recorded.",
@@ -192,7 +187,7 @@ export function evaluateAttendance(
 }
 
 function deny(code: AttendanceDecisionCode, message: string): AttendanceDecision {
-  return { allowed: false, type: null, code, message, isMakeUp: false };
+  return { allowed: false, needsConfirmation: false, type: null, code, message, isMakeUp: false };
 }
 
 /** Percentage helper used across attendance dashboards and student profiles. */

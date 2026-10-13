@@ -328,7 +328,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <p className="text-sm text-black/70 dark:text-white/70">{message}</p>
+      <p className="whitespace-pre-line text-sm text-black/70 dark:text-white/70">{message}</p>
       {requireReason && (
         <Field label="Reason (recorded in the audit log)" required>
           {(id) => (

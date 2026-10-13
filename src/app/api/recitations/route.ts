@@ -18,7 +18,7 @@ const listSchema = paginationSchema.extend({
 
 const createSchema = z.object({
   studentId: z.string().uuid(),
-  subjectId: z.string().uuid(),
+  subjectId: z.string().uuid().optional(),
   groupId: z.string().uuid().optional(),
   date: z.string().datetime(),
   content: z.string().trim().min(1).max(300),
@@ -95,6 +95,28 @@ export async function POST(request: NextRequest) {
     });
     if (!student) throw new BusinessRuleError("Student not found.", { status: 404 });
     resolveBranchScope(ctx, student.branchId);
+
+    // Optional group/subject references come from the client: they must
+    // belong to this organization (and the group to a branch in scope).
+    if (input.groupId) {
+      const group = await db.group.findFirst({
+        where: {
+          id: input.groupId,
+          deletedAt: null,
+          branch: { center: { organizationId: ctx.organizationId } }
+        },
+        select: { branchId: true }
+      });
+      if (!group) throw new BusinessRuleError("Invalid group.", { status: 400 });
+      resolveBranchScope(ctx, group.branchId);
+    }
+    if (input.subjectId) {
+      const subject = await db.subject.findFirst({
+        where: { id: input.subjectId, organizationId: ctx.organizationId, deletedAt: null },
+        select: { id: true }
+      });
+      if (!subject) throw new BusinessRuleError("Invalid subject.", { status: 400 });
+    }
 
     const teacher = await db.teacher.findFirst({
       where: { userId: ctx.userId },

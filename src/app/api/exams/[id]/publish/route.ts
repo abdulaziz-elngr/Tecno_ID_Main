@@ -5,6 +5,7 @@ import { handleApiError, ok, NotFoundError, BusinessRuleError } from "@/lib/api"
 import { writeAuditLog } from "@/lib/audit";
 import { dispatchEvent } from "@/lib/notifications";
 import { percentage } from "@/lib/grading";
+import { loadAccessibleGroup } from "@/lib/group-access";
 
 /**
  * Publishing an exam makes results visible on student/parent profiles
@@ -26,6 +27,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
       }
     });
     if (!exam) throw new NotFoundError("Exam not found.");
+    await loadAccessibleGroup(ctx, exam.groupId);
     if (exam.isPublished) throw new BusinessRuleError("This exam is already published.");
 
     const ungraded = exam.results.filter((r) => !r.isAbsent && r.score === null).length;
@@ -53,7 +55,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
     const maxScore = Number(exam.maxScore);
     for (const result of exam.results) {
       if (result.isAbsent || result.score === null) continue;
-      void dispatchEvent({
+      await dispatchEvent({
         organizationId: ctx.organizationId,
         event: "EXAM_PUBLISHED",
         studentId: result.studentId,

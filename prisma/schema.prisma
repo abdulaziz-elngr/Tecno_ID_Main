@@ -1,18 +1,23 @@
 // ==========================================================
-// TecnoID — Database Schema (Phase 1–2 Foundation)
+// TecnoID — Database Schema
 // PostgreSQL + Prisma
 //
-// Covers: Organization/Center/Branch hierarchy, granular RBAC,
-// academic structure (Levels/Subjects/Groups/Rooms), Students,
-// Parents, and Audit Logging.
+// Academic hierarchy is strict and non-negotiable:
+//   Organization -> Center -> Branch -> Stage -> Grade -> Group -> Student
 //
-// Later phases (attendance, exams, payments, WhatsApp, etc.)
-// extend this file — see docs/ARCHITECTURE.md for the full
-// planned data model.
+// There is no concept of a physical Room/Classroom anywhere in this
+// schema. Group capacity is the only capacity that exists.
+//
+// Covers: Organization/Center/Branch hierarchy, granular RBAC,
+// academic structure (Stages/Grades/Groups), Students, Parents,
+// Sessions/Attendance (incl. cross-group make-up), Subscriptions/
+// Payments, Exams, Recitation, WhatsApp notifications, and Audit
+// Logging. See docs/ARCHITECTURE.md for the full data model.
 // ==========================================================
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -75,7 +80,6 @@ model Branch {
   deletedAt DateTime?
 
   center         Center          @relation(fields: [centerId], references: [id])
-  rooms          Room[]
   groups         Group[]
   students       Student[]
   employees      Employee[]
@@ -83,23 +87,6 @@ model Branch {
   userBranches   UserBranch[]
 
   @@index([centerId])
-}
-
-model Room {
-  id        String   @id @default(uuid())
-  branchId  String
-  name      String
-  number    String?
-  capacity  Int
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
-
-  branch Branch  @relation(fields: [branchId], references: [id])
-  groups Group[]
-
-  @@index([branchId])
 }
 
 // ----------------------------------------------------------
@@ -229,115 +216,135 @@ model Session {
 // ACADEMIC STRUCTURE
 // ----------------------------------------------------------
 
-model AcademicLevel {
+// The academic hierarchy is strict: Stage -> Grade -> Group -> Student.
+// A Stage is a broad phase (Primary/Preparatory/Secondary). It has no
+// direct relationship to Group or Student — those always go through
+// a Grade. This is enforced by simply not exposing a stage-level FK
+// on Group/Student anywhere in this schema.
+model Stage {
   id             String   @id @default(uuid())
   organizationId String
-  name           String   // e.g. "Primary", "Secondary", custom
+  name           String   // e.g. "Primary", "Preparatory", "Secondary"
   order          Int      @default(0)
+  isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  grades   AcademicGrade[]
-  groups   Group[]
-  students Student[]
+  grades           Grade[]
+  students         Student[]
+  subscriptionFees SubscriptionFee[]
 
   @@unique([organizationId, name])
+  @@index([organizationId])
 }
 
-model AcademicGrade {
-  id      String @id @default(uuid())
-  levelId String
-  name    String // e.g. "Grade 1", "Grade 2"
-  order   Int    @default(0)
+// A Grade always belongs to exactly one Stage. Groups (and therefore
+// Students) always belong to exactly one Grade — never to a Stage
+// directly.
+model Grade {
+  id       String  @id @default(uuid())
+  stageId  String
+  name     String  // e.g. "Grade 1", "Grade 2"
+  order    Int     @default(0)
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  level AcademicLevel @relation(fields: [levelId], references: [id])
-
-  // Phase 2: a Grade belongs to exactly one Stage (AcademicLevel). Subjects
-  // and Groups both reference a Grade directly; DB-level triggers (see the
-  // Phase 2 migration) additionally enforce that a Subject/Group's stored
-  // academicLevelId always matches this Grade's own levelId, and that a
-  // Group's Subject belongs to the same Grade as the Group itself — see
-  // enforce_subject_grade_level_match() / enforce_group_grade_level_match()
-  // / enforce_group_subject_grade_match() in
-  // prisma/migrations/20260920090000_phase2_stage_grade_relationships/migration.sql.
-  subjects Subject[]
+  stage    Stage     @relation(fields: [stageId], references: [id])
   groups   Group[]
+  students Student[]
+  fees     GradeFee[]
 
-  @@unique([levelId, name])
+  @@unique([stageId, name])
+  @@index([stageId])
 }
 
+// A Subject (e.g. Mathematics, Physics) is taught by Teachers and delivered
+// through Groups. Relationship chain:
+//   Subject -> Teacher (TeacherSubject, many-to-many, optional)
+//   Subject -> Group (Group.subjectId) -> Students (Student.groupId)
+// The Stage/Grade a subject is taught in is derived from its groups
+// (Group.gradeId -> Grade.stageId), so a subject can span several grades
+// without duplicating it. Exams also reference a subject.
 model Subject {
   id             String   @id @default(uuid())
   organizationId String
-  // Phase 2 — Stage/Grade relationship (nullable for backward
-  // compatibility with subjects created before this phase; see the
-  // migration notes below and docs/DATABASE.md for the backfill
-  // strategy). New/edited subjects are required to set both at the
-  // application layer (src/app/api/subjects/route.ts).
-  academicLevelId String?
-  academicGradeId String?
-  name            String
+  name           String
+  code           String? // optional short code, e.g. "MATH" (unique per organization when set)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   deletedAt      DateTime?
 
-  academicLevel AcademicLevel? @relation(fields: [academicLevelId], references: [id])
-  academicGrade AcademicGrade? @relation(fields: [academicGradeId], references: [id])
+  exams           Exam[]
+  groups          Group[]
+  teacherSubjects TeacherSubject[]
 
-  groups Group[]
-  exams  Exam[]
-
-  // A subject name only needs to be unique within its own Grade — the same
-  // name ("Mathematics") legitimately exists once per Grade. Subjects with
-  // no Grade yet (legacy, pre-Phase-2 rows) are exempted since Postgres
-  // treats NULLs as distinct in a unique index.
-  @@unique([organizationId, academicGradeId, name])
-  @@index([organizationId])
-  @@index([academicLevelId])
-  @@index([academicGradeId])
+  @@unique([organizationId, name])
+  @@unique([organizationId, code])
 }
 
-model Group {
-  id              String   @id @default(uuid())
-  branchId        String
-  subjectId       String
-  academicLevelId String
-  // Phase 2 — Group → Grade relationship. Nullable for backward
-  // compatibility with groups created before this phase (see the
-  // Phase 2 migration for the backfill/reporting strategy); required at
-  // the application layer for all new/edited groups going forward.
-  academicGradeId String?
-  roomId          String?
-  teacherId       String?
-  assistantId     String?
-  name            String
-  capacity        Int
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  deletedAt       DateTime?
+/// Declares that a Teacher is qualified/responsible for a Subject. This is
+/// descriptive staffing data: the teacher actually responsible for a given
+/// group stays Group.teacherId (single source of truth for exams, sessions
+/// and scheduling). A teacher may teach many subjects and a subject may
+/// have many teachers. Teacher records are reused — never duplicated.
+model TeacherSubject {
+  id        String   @id @default(uuid())
+  teacherId String
+  subjectId String
+  createdAt DateTime @default(now())
 
-  branch        Branch         @relation(fields: [branchId], references: [id])
-  subject       Subject        @relation(fields: [subjectId], references: [id])
-  academicLevel AcademicLevel  @relation(fields: [academicLevelId], references: [id])
-  academicGrade AcademicGrade? @relation(fields: [academicGradeId], references: [id])
-  room          Room?          @relation(fields: [roomId], references: [id])
-  teacher       Teacher?       @relation("GroupTeacher", fields: [teacherId], references: [id])
-  assistant     Teacher?       @relation("GroupAssistant", fields: [assistantId], references: [id])
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+  subject Subject @relation(fields: [subjectId], references: [id])
 
-  groupStudents      GroupStudent[]
-  primaryForStudents Student[]      @relation("PrimaryGroup")
-  schedules          Schedule[]
-  sessions           ClassSession[]
-  exams              Exam[]
-  assignments        Assignment[]
-  announcements      Announcement[]
-
-  @@index([branchId])
+  @@unique([teacherId, subjectId])
+  @@index([teacherId])
   @@index([subjectId])
-  @@index([academicLevelId])
-  @@index([academicGradeId])
-  @@index([roomId])
+}
+
+// A Group is a physical-room-free cohort of students: it belongs to
+// exactly one Grade, is optionally tied to ONE Subject (Stage -> Grade ->
+// Subject -> Group), has its own capacity and weekly Schedule, and is
+// optionally assigned a teacher. subjectId is nullable so groups that
+// existed before subjects were attached keep working unchanged. Group capacity is the only capacity
+// concept left in the system (Rooms were removed entirely).
+model Group {
+  id          String   @id @default(uuid())
+  branchId    String
+  gradeId     String
+  subjectId   String?
+  teacherId   String?
+  assistantId String?
+  name        String
+  capacity    Int
+  notes       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  branch    Branch   @relation(fields: [branchId], references: [id])
+  grade     Grade    @relation(fields: [gradeId], references: [id])
+  subject   Subject? @relation(fields: [subjectId], references: [id])
+  teacher   Teacher? @relation("GroupTeacher", fields: [teacherId], references: [id])
+  assistant Teacher? @relation("GroupAssistant", fields: [assistantId], references: [id])
+
+  students    Student[]
+  schedules   Schedule[]
+  sessions    ClassSession[]
+  lessonPlans LessonPlan[]
+  exams       Exam[]
+  assignments Assignment[]
+  recitationSessions RecitationSession[]
+
+  // The same group name (e.g. "G1") may exist once per subject within a
+  // grade: Math/G1 and Physics/G1 are different groups. Postgres treats
+  // NULL subjectIds as distinct, so uniqueness for legacy subject-less
+  // groups is additionally enforced in the API layer.
+  @@unique([gradeId, subjectId, name])
+  @@index([branchId])
+  @@index([gradeId])
+  @@index([subjectId])
   @@index([teacherId])
   @@index([assistantId])
 }
@@ -398,63 +405,52 @@ model Teacher {
   user            User?   @relation(fields: [userId], references: [id])
   groupsAsTeacher   Group[] @relation("GroupTeacher")
   groupsAsAssistant Group[] @relation("GroupAssistant")
+  teacherSubjects   TeacherSubject[]
 
   @@index([organizationId])
   @@index([branchId])
-}
-
-// A student's enrollment in a group. isPrimary marks the group
-// this student is regularly scheduled in for this subject; other
-// rows represent make-up-eligible groups. Enforced in app logic:
-// a student may have at most one isPrimary=true row per subject.
-model GroupStudent {
-  id        String   @id @default(uuid())
-  groupId   String
-  studentId String
-  isPrimary Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  group   Group   @relation(fields: [groupId], references: [id])
-  student Student @relation(fields: [studentId], references: [id])
-
-  @@unique([groupId, studentId])
-  @@index([groupId])
-  @@index([studentId])
 }
 
 // ----------------------------------------------------------
 // STUDENTS & PARENTS
 // ----------------------------------------------------------
 
+// A Student belongs to exactly one Group (and therefore, transitively,
+// to exactly one Grade and one Stage). stageId/gradeId are kept
+// denormalized on the student row (written in the same transaction as
+// groupId) purely so stage/grade filters and reports never need to
+// join through Group — Group.gradeId / Grade.stageId remain the
+// source of truth and are re-validated on every write.
 model Student {
-  id              String    @id @default(uuid())
-  organizationId  String
-  branchId        String
-  studentCode     String    @unique // human-readable unique Student ID
-  qrCode          String    @unique // encoded value for QR/barcode scanning
-  fullName        String
-  photoUrl        String?
-  gender          Gender
-  dateOfBirth     DateTime?
-  phone           String?
-  address         String?
-  school          String?
-  academicLevelId String?
-  primaryGroupId  String?   // convenience pointer; source of truth is GroupStudent.isPrimary
-  enrollmentDate  DateTime  @default(now())
-  status          StudentStatus @default(ACTIVE)
-  notes           String?
-  emergencyContact String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  deletedAt       DateTime? // soft delete only — never hard-delete a student with history
+  id                String    @id @default(uuid())
+  organizationId    String
+  branchId          String
+  studentCode       String    @unique // human-readable unique Student ID (also used as barcode payload)
+  qrCode            String    @unique // encoded value for QR/barcode scanning
+  fullName          String
+  photoUrl          String?
+  gender            Gender
+  dateOfBirth       DateTime?
+  phone             String?
+  address           String?
+  school            String?
+  stageId           String
+  gradeId           String
+  groupId           String
+  enrollmentDate    DateTime  @default(now())
+  status            StudentStatus @default(ACTIVE)
+  notes             String?
+  emergencyContact  String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime? // soft delete only — never hard-delete a student with history
 
-  branch        Branch          @relation(fields: [branchId], references: [id])
-  academicLevel AcademicLevel?  @relation(fields: [academicLevelId], references: [id])
-  primaryGroup  Group?          @relation("PrimaryGroup", fields: [primaryGroupId], references: [id])
+  branch Branch @relation(fields: [branchId], references: [id])
+  stage  Stage  @relation(fields: [stageId], references: [id])
+  grade  Grade  @relation(fields: [gradeId], references: [id])
+  group  Group  @relation(fields: [groupId], references: [id])
 
-  parents       StudentParent[]
-  groupStudents GroupStudent[]
+  parents StudentParent[]
 
   // Phase 5–8 relations
   attendances           Attendance[]
@@ -464,12 +460,15 @@ model Student {
   subscriptions         Subscription[]
   payments              Payment[]
   invoices              Invoice[]
-  announcementRecipients AnnouncementRecipient[]
+  recognitions          StudentRecognition[]
 
   @@index([organizationId])
   @@index([branchId])
   @@index([studentCode])
   @@index([fullName])
+  @@index([stageId])
+  @@index([gradeId])
+  @@index([groupId])
 }
 
 enum Gender {
@@ -601,7 +600,6 @@ model ClassSession {
   scheduleId     String?
   teacherId      String?
   assistantId    String?
-  roomId         String?
   date           DateTime      @db.Date
   startMinutes   Int
   endMinutes     Int
@@ -609,19 +607,64 @@ model ClassSession {
   notes          String?
   openedAt       DateTime?
   closedAt       DateTime?
+  // Stage 2 — lesson formation. A session created from a monthly
+  // LessonPlan carries the plan it belongs to and its 1-based number
+  // inside that plan. Both stay NULL for sessions that pre-date lesson
+  // formation (they keep working exactly as before).
+  planId         String?
+  lessonNumber   Int?
+  openedById     String?
+  closedById     String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   group       Group        @relation(fields: [groupId], references: [id])
+  plan        LessonPlan?  @relation(fields: [planId], references: [id])
   attendances Attendance[]
+  // Stage 3 — performance pages: a lesson can carry one recitation and homework.
+  recitationSession RecitationSession?
+  assignments       Assignment[]
 
   // One session per group per date per start time — prevents accidental
   // double generation when the schedule generator is run twice.
   @@unique([groupId, date, startMinutes])
+  // A lesson number is unique inside its plan (NULL planIds never clash).
+  @@unique([planId, lessonNumber])
+  @@index([planId])
   @@index([organizationId])
   @@index([branchId])
   @@index([date])
   @@index([status])
+}
+
+/// Stage 2 — the monthly lesson plan of ONE group (تشكيل الحصص). It records
+/// which month/year the lessons were formed for and how many lessons per week
+/// were requested; the dated, numbered lessons themselves are ClassSession
+/// rows pointing back here via ClassSession.planId. Subject and teacher are
+/// not duplicated: the subject comes from Group.subjectId and the teacher is
+/// copied onto every ClassSession (ClassSession.teacherId) at creation time so
+/// history stays accurate if the group's teacher changes later.
+model LessonPlan {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String
+  groupId        String
+  year           Int
+  month          Int // 1–12
+  lessonsPerWeek Int
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  group    Group          @relation(fields: [groupId], references: [id])
+  sessions ClassSession[]
+
+  // One plan per group per calendar month — re-forming a month can never
+  // overwrite lesson history.
+  @@unique([groupId, year, month])
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([year, month])
 }
 
 enum AttendanceType {
@@ -645,11 +688,17 @@ model Attendance {
   deviceInfo     String?
   notes          String?
 
-  // Make-up bookkeeping (spec §14): why the student was allowed into a
-  // group that is not their primary group, and who authorised it.
+  // Make-up bookkeeping (spec §10): when `type = MAKE_UP`, groupId above
+  // is the group actually attended (the session's group) and
+  // originGroupId is the student's own (home) group at the time of the
+  // scan — denormalized here because Student.groupId can change later
+  // and this row must stay historically accurate. makeUpApprovedBy is
+  // the operator who accepted the "Student belongs to another group"
+  // confirmation dialog.
   makeUpReason      String?
   makeUpApprovedBy  String?
-  originSessionId   String? // the session the student originally missed
+  originGroupId     String?
+  originSessionId   String? // optional: the specific session the student originally missed, if known
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -747,7 +796,7 @@ model Recitation {
   id             String           @id @default(uuid())
   organizationId String
   studentId      String
-  subjectId      String
+  subjectId      String?
   groupId        String?
   teacherId      String?
   date           DateTime
@@ -757,13 +806,47 @@ model Recitation {
   status         RecitationStatus
   notes          String?
   createdById    String?
+  // Stage 3 — set when the row is a student's result inside a RecitationSession
+  // (the new per-lesson recitation flow). NULL for free-form legacy records.
+  recitationSessionId String?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   student Student @relation(fields: [studentId], references: [id])
+  recitationSession RecitationSession? @relation(fields: [recitationSessionId], references: [id])
 
+  // One result per student per recitation session (NULLs never clash, so
+  // legacy rows are unaffected).
+  @@unique([recitationSessionId, studentId])
   @@index([organizationId])
   @@index([studentId])
+  @@index([date])
+}
+
+/// Stage 3 — a recitation (تسميع) held for ONE group during ONE lesson
+/// (ClassSession). It fixes the maximum score; each student's result is a
+/// Recitation row pointing back here. One recitation per lesson.
+model RecitationSession {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String
+  groupId        String
+  sessionId      String
+  title          String?
+  date           DateTime @db.Date
+  maxScore       Decimal  @default(10) @db.Decimal(5, 2)
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  group   Group        @relation(fields: [groupId], references: [id])
+  session ClassSession @relation(fields: [sessionId], references: [id])
+  records Recitation[]
+
+  @@unique([sessionId])
+  @@index([organizationId])
+  @@index([groupId])
   @@index([date])
 }
 
@@ -772,21 +855,26 @@ model Assignment {
   organizationId String
   branchId       String
   groupId        String
-  subjectId      String
+  subjectId      String? // free-form label; Group no longer carries a subject
   title          String
   description    String?
   dueDate        DateTime
   maxScore       Decimal   @db.Decimal(6, 2)
+  // Stage 3 — the lesson (ClassSession) this homework belongs to. NULL for
+  // assignments created before the homework page was reworked.
+  sessionId      String?
   createdById    String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
   group       Group                  @relation(fields: [groupId], references: [id])
+  session     ClassSession?          @relation(fields: [sessionId], references: [id])
   submissions AssignmentSubmission[]
 
   @@index([organizationId])
   @@index([groupId])
+  @@index([sessionId])
   @@index([dueDate])
 }
 
@@ -817,9 +905,76 @@ model AssignmentSubmission {
   @@index([studentId])
 }
 
+/// Stage 3 — a teacher/admin recognising a student (Student performance page).
+/// Insert-only history: who was recognised, why, when, and any notes.
+model StudentRecognition {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String
+  studentId      String
+  reason         String
+  recognizedAt   DateTime @db.Date
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@index([organizationId])
+  @@index([studentId])
+  @@index([recognizedAt])
+}
+
 // ==========================================================
 // PHASE 7 — SUBSCRIPTIONS, PAYMENTS, INVOICES
 // ==========================================================
+
+/// Configurable monthly subscription fee per Stage (spec §17).
+/// Fees are never hard-coded: Settings → Subscription Fees lets an
+/// admin add/edit/activate/deactivate a fee per Stage, each with an
+/// effective date. `billing.currentStageFee()` always resolves the
+/// active row for a Stage as of "now" (or a given date).
+model SubscriptionFee {
+  id             String    @id @default(uuid())
+  organizationId String
+  stageId        String
+  amount         Decimal   @db.Decimal(10, 2)
+  isActive       Boolean   @default(true)
+  effectiveFrom  DateTime  @default(now())
+  notes          String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  stage Stage @relation(fields: [stageId], references: [id])
+
+  @@index([organizationId])
+  @@index([stageId])
+  @@index([isActive])
+}
+
+/// Monthly subscription price per Grade (Stage -> Grade -> Price).
+/// History is append-only: changing a price creates a NEW row and flips the
+/// previous one to isActive=false. Rows are never updated or deleted, and
+/// Subscription rows copy the amount when they are created, so changing a
+/// price can never alter a past payment.
+model GradeFee {
+  id             String   @id @default(uuid())
+  organizationId String
+  gradeId        String
+  amount         Decimal  @db.Decimal(10, 2)
+  isActive       Boolean  @default(true)
+  effectiveFrom  DateTime @default(now())
+  notes          String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  grade Grade @relation(fields: [gradeId], references: [id])
+
+  @@index([organizationId])
+  @@index([gradeId, effectiveFrom])
+  @@index([isActive])
+}
 
 enum SubscriptionStatus {
   PAID
@@ -897,6 +1052,9 @@ model Payment {
   voidedById     String?
   voidedAt       DateTime?
   voidReason     String?
+  refundedById   String?
+  refundedAt     DateTime?
+  refundReason   String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -955,7 +1113,11 @@ model Invoice {
 }
 
 // ==========================================================
-// PHASE 8 — EXPENSES & UTILITIES
+// PHASE 8 — EXPENSES & UTILITIES  (DEPRECATED — no code uses these)
+// The Expenses / Electricity / Water features were removed from the
+// application. The tables below are intentionally KEPT so any historical
+// financial rows already stored are never destroyed. They can be dropped
+// manually later, after the owner has exported the data.
 // ==========================================================
 
 enum ExpenseCategory {
@@ -1183,57 +1345,6 @@ model NotificationRule {
 
   @@unique([organizationId, event, channel])
   @@index([organizationId])
-}
-
-// ==========================================================
-// PHASE 2 — ANNOUNCEMENTS (manual, click-to-chat WhatsApp — see
-// src/lib/whatsapp-link.ts). This is intentionally separate from the
-// WhatsAppMessage/NotificationRule outbox above: an Announcement is
-// something a staff member composes and sends themselves by opening
-// one wa.me link per recipient, not an automated queued send.
-// ==========================================================
-
-enum AnnouncementAudienceType {
-  STUDENT // a single student/parent
-  GROUP // every student currently enrolled in a Group
-  SELECTED // a hand-picked list of students
-}
-
-model Announcement {
-  id             String                   @id @default(uuid())
-  organizationId String
-  branchId       String?
-  groupId        String? // set when audienceType = GROUP
-  createdById    String?
-  title          String
-  message        String
-  audienceType   AnnouncementAudienceType
-  createdAt      DateTime                 @default(now())
-
-  group      Group?                   @relation(fields: [groupId], references: [id])
-  recipients AnnouncementRecipient[]
-
-  @@index([organizationId])
-  @@index([branchId])
-  @@index([groupId])
-  @@index([createdAt])
-}
-
-/// Materialized at creation time (e.g. a Group's roster on that day),
-/// so an announcement's recipient list stays a stable historical record
-/// even if students are later added to / removed from the group.
-model AnnouncementRecipient {
-  id             String   @id @default(uuid())
-  announcementId String
-  studentId      String
-  createdAt      DateTime @default(now())
-
-  announcement Announcement @relation(fields: [announcementId], references: [id])
-  student      Student      @relation(fields: [studentId], references: [id])
-
-  @@unique([announcementId, studentId])
-  @@index([announcementId])
-  @@index([studentId])
 }
 
 // ==========================================================

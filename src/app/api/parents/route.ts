@@ -3,6 +3,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope, ForbiddenError, UnauthorizedError } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { upsertParentForOrg } from "@/lib/scope";
+import { toAsciiDigits } from "@/lib/wa-link";
 
 /**
  * Parent is intentionally NOT organizationId-scoped in the schema:
@@ -18,7 +20,9 @@ const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(200).optional(),
-  branchId: z.string().uuid().optional()
+  branchId: z.string().uuid().optional(),
+  /** Only parents with at least one (non-deleted) student in this group. */
+  groupId: z.string().uuid().optional()
 });
 
 const createParentSchema = z.object({
@@ -53,7 +57,7 @@ export async function GET(request: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid query parameters." }, { status: 400 });
     }
-    const { page, pageSize, search, branchId } = parsed.data;
+    const { page, pageSize, search, branchId, groupId } = parsed.data;
     const branchIds = resolveBranchScope(ctx, branchId);
 
     const studentScope = {
@@ -62,13 +66,21 @@ export async function GET(request: NextRequest) {
       ...(branchIds ? { branchId: { in: branchIds } } : {})
     };
 
+    // The group filter narrows the parent's *linked students*, which are already
+    // restricted to this organization/branch scope + not deleted, so a groupId of
+    // another organization simply matches nothing. It ANDs with the search below.
+    const filterScope = { ...studentScope, ...(groupId ? { groupId } : {}) };
+
+    // Phones may be typed with Arabic-Indic digits; stored numbers are ASCII.
+    const searchDigits = search ? toAsciiDigits(search) : undefined;
+
     const where = {
-      students: { some: { student: studentScope } },
+      students: { some: { student: filterScope } },
       ...(search
         ? {
             OR: [
               { fullName: { contains: search, mode: "insensitive" as const } },
-              { phone: { contains: search } }
+              { phone: { contains: searchDigits ?? search } }
             ]
           }
         : {})
@@ -140,21 +152,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid student." }, { status: 400 });
     }
 
-    // Reuse an existing Parent by phone (siblings often share a guardian)
-    // rather than creating a duplicate.
-    const parent = await db.parent.upsert({
-      where: { phone: input.phone },
-      update: {
-        fullName: input.fullName,
-        whatsappNumber: input.whatsappNumber,
-        preferredLanguage: input.preferredLanguage
-      },
-      create: {
-        fullName: input.fullName,
-        phone: input.phone,
-        whatsappNumber: input.whatsappNumber,
-        preferredLanguage: input.preferredLanguage
-      }
+    // Reuse an existing Parent by phone (siblings often share a guardian).
+    // A parent that already belongs to another organization is linked but
+    // never modified (see src/lib/scope.ts).
+    const parent = await upsertParentForOrg(db, ctx.organizationId, {
+      phone: input.phone,
+      fullName: input.fullName,
+      whatsappNumber: input.whatsappNumber,
+      preferredLanguage: input.preferredLanguage
     });
 
     const link = await db.studentParent.upsert({

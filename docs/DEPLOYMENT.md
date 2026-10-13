@@ -7,8 +7,8 @@
 - An S3-compatible bucket for file storage in production (`local`
   storage is dev-only — it writes to disk on the app server, which
   doesn't survive redeploys or multi-instance hosting)
-- Optional: WhatsApp Business Platform credentials, a way to run the
-  WhatsApp queue worker on a schedule (see `docs/WHATSAPP.md`)
+- WhatsApp needs no setup: staff open plain wa.me chat links (see
+  `docs/WHATSAPP.md`)
 
 ## 2. Environment variables
 
@@ -21,9 +21,8 @@ Copy `.env.example` to `.env` and fill in every value marked
   `STORAGE_LOCAL_DIR`/`STORAGE_PUBLIC_PREFIX` for a single-instance
   dev/staging deployment)
 
-Everything else (WhatsApp, email) can stay blank; the app degrades
-gracefully — for example the WhatsApp settings screen shows "not
-configured" instead of failing.
+Everything else is optional (see `.env.example`). WhatsApp needs no
+environment variables.
 
 ## 3. Build steps
 
@@ -90,8 +89,8 @@ sandboxes with an explicit binaries.prisma.sh block.
 
 - [ ] `GET /api/health` returns `200`
 - [ ] Log in with a seeded (dev) or freshly created (prod) admin user
-- [ ] `/dashboard/settings` → Integrations shows the expected WhatsApp
-      configured/not-configured state
+- [ ] A WhatsApp button on an absent student or unpaid row opens a
+      `https://wa.me/20...` chat with the message pre-filled
 - [ ] A test file upload round-trips through `/api/files/upload` and
       `/api/files/[...key]`
 - [ ] Confirm backups are running — see `docs/BACKUP.md`

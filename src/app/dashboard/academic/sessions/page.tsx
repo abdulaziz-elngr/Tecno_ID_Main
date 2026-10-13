@@ -1,224 +1,167 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
-import { apiPost, formatDate, qs, todayISO, useApi } from "@/lib/client";
-import { Badge, DataTable, ErrorNotice, Field, Modal, PageHeader, Pager, useToast } from "@/components/ui";
+import { currentMonth, qs, useApi } from "@/lib/client";
+import { fmt, formatLessonDate, monthLabel, parseMonthInput, weekdayLabel } from "@/lib/lesson-format";
+import { Badge, ErrorNotice, Field, PageHeader } from "@/components/ui";
+import { GroupPicker } from "@/components/GroupPicker";
+import { LessonReportView } from "@/components/LessonReportView";
 
-interface GroupOption {
-  id: string;
-  name: string;
-  subject: { name: string };
-}
+/**
+ * Lessons — the lesson history / archive (Stage 2).
+ *
+ * Month → Group (Stage › Grade › Subject › Group) → Lesson number, then the
+ * full lesson record: details, present / absent / late / unpaid students and
+ * a printable report. Because every attendance record belongs to a lesson,
+ * all historical attendance is reachable from here.
+ */
 
-interface SessionRow {
+interface LessonRow {
   id: string;
+  lessonNumber: number | null;
   date: string;
   startMinutes: number;
   endMinutes: number;
-  status: string;
-  group: {
-    id: string;
-    name: string;
-    subject: { name: string };
-    teacher: { fullName: string } | null;
-    room: { name: string } | null;
-  };
+  status: "SCHEDULED" | "OPEN" | "COMPLETED" | "CANCELLED";
   _count: { attendances: number };
 }
 
-function minutesToTime(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function toneFor(status: string) {
+function statusTone(status: string) {
   if (status === "COMPLETED") return "success" as const;
   if (status === "CANCELLED") return "danger" as const;
   if (status === "OPEN") return "brand" as const;
   return "neutral" as const;
 }
 
-export default function SessionsPage() {
-  const { t } = useI18n();
+function LessonsInner() {
+  const { t, locale } = useI18n();
   const router = useRouter();
-  const toast = useToast();
+  const search = useSearchParams();
 
-  const [from, setFrom] = useState(todayISO());
-  const [to, setTo] = useState(todayISO());
-  const [groupId, setGroupId] = useState("");
-  const [page, setPage] = useState(1);
+  const [monthValue, setMonthValue] = useState(() => {
+    const y = Number(search.get("year"));
+    const m = Number(search.get("month"));
+    return y && m ? `${y}-${String(m).padStart(2, "0")}` : currentMonth();
+  });
+  const [groupId, setGroupId] = useState(search.get("groupId") ?? "");
+  const [lessonId, setLessonId] = useState(search.get("lesson") ?? "");
+  const ym = parseMonthInput(monthValue);
 
-  const query = qs({ from, to, groupId: groupId || undefined, page, pageSize: 25 });
-  const { data, loading, error, reload } = useApi<{
-    sessions: SessionRow[];
-    pagination: { page: number; totalPages: number };
-  }>(`/api/sessions${query}`);
-  const { data: groups } = useApi<GroupOption[]>("/api/groups");
+  // Keep the URL shareable / refresh-safe.
+  useEffect(() => {
+    if (!ym) return;
+    const next = qs({ year: ym.year, month: ym.month, groupId, lesson: lessonId });
+    router.replace(`/dashboard/academic/sessions${next}`, { scroll: false });
+  }, [ym?.year, ym?.month, groupId, lessonId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [genOpen, setGenOpen] = useState(false);
-  const [genFrom, setGenFrom] = useState(todayISO());
-  const [genTo, setGenTo] = useState(todayISO());
-  const [generating, setGenerating] = useState(false);
-  const [genError, setGenError] = useState<string | null>(null);
-  const [genResult, setGenResult] = useState<{ created: number; skipped: number } | null>(null);
+  const lessons = useApi<{ sessions: LessonRow[] }>(
+    groupId && ym ? `/api/sessions${qs({ groupId, year: ym.year, month: ym.month, pageSize: 100 })}` : null
+  );
+  const rows = lessons.data?.sessions ?? [];
 
-  async function handleGenerate(event: FormEvent) {
-    event.preventDefault();
-    setGenerating(true);
-    setGenError(null);
-    try {
-      const result = await apiPost<{ created: number; skipped: number }>("/api/sessions/generate", {
-        from: genFrom,
-        to: genTo
-      });
-      setGenResult(result);
-      toast.success(t("common.saved"));
-      reload();
-    } catch (err) {
-      setGenError(err instanceof Error ? err.message : "Failed to generate sessions.");
-    } finally {
-      setGenerating(false);
-    }
-  }
+  // Drop a selected lesson that does not belong to the current list.
+  useEffect(() => {
+    if (lessonId && lessons.data && !rows.some((r) => r.id === lessonId)) setLessonId("");
+  }, [lessons.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-5">
       <PageHeader
         title={t("sessions.title")}
+        description={t("lesson.pickPrompt")}
         actions={
-          <button type="button" className="btn-primary" onClick={() => setGenOpen(true)}>
-            {t("sessions.generate")}
-          </button>
+          <Link href="/dashboard/academic/lesson-formation" className="btn-secondary">
+            {t("nav.lessonFormation")}
+          </Link>
         }
       />
 
-      <ErrorNotice message={error} />
-
-      <div className="card grid gap-3 p-4 sm:grid-cols-3">
-        <Field label={t("common.from")}>
-          {(id) => (
-            <input
-              id={id}
-              type="date"
-              className="input"
-              value={from}
-              onChange={(e) => {
-                setPage(1);
-                setFrom(e.target.value);
-              }}
-            />
-          )}
-        </Field>
-        <Field label={t("common.to")}>
-          {(id) => (
-            <input
-              id={id}
-              type="date"
-              className="input"
-              value={to}
-              onChange={(e) => {
-                setPage(1);
-                setTo(e.target.value);
-              }}
-            />
-          )}
-        </Field>
-        <Field label={t("common.group")}>
-          {(id) => (
-            <select
-              id={id}
-              className="input"
-              value={groupId}
-              onChange={(e) => {
-                setPage(1);
-                setGroupId(e.target.value);
-              }}
-            >
-              <option value="">{t("common.all")}</option>
-              {groups?.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name} — {g.subject.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
+      <div className="card space-y-3 p-4">
+        <div className="max-w-xs">
+          <Field label={t("lf.month")} required>
+            {(id) => (
+              <input
+                id={id}
+                type="month"
+                className="input"
+                value={monthValue}
+                onChange={(e) => {
+                  setMonthValue(e.target.value);
+                  setLessonId("");
+                }}
+              />
+            )}
+          </Field>
+        </div>
+        <GroupPicker
+          groupId={groupId}
+          includeInactive
+          onChange={(id) => {
+            setGroupId(id);
+            setLessonId("");
+          }}
+        />
       </div>
 
-      <DataTable
-        columns={[
-          t("common.date"),
-          t("common.time"),
-          t("common.group"),
-          t("common.subject"),
-          t("common.teacher"),
-          t("common.room"),
-          t("common.status"),
-          t("common.attendance")
-        ]}
-        loading={loading}
-        isEmpty={(data?.sessions.length ?? 0) === 0}
-        emptyTitle={t("sessions.empty")}
-      >
-        {data?.sessions.map((s) => (
-          <tr
-            key={s.id}
-            className="cursor-pointer border-b border-black/5 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]"
-            onClick={() => router.push(`/dashboard/academic/sessions/${s.id}`)}
-          >
-            <td className="p-3">{formatDate(s.date)}</td>
-            <td className="p-3">
-              {minutesToTime(s.startMinutes)}–{minutesToTime(s.endMinutes)}
-            </td>
-            <td className="p-3 font-medium">{s.group.name}</td>
-            <td className="p-3">{s.group.subject.name}</td>
-            <td className="p-3">{s.group.teacher?.fullName ?? "—"}</td>
-            <td className="p-3">{s.group.room?.name ?? "—"}</td>
-            <td className="p-3">
-              <Badge tone={toneFor(s.status)}>{s.status}</Badge>
-            </td>
-            <td className="p-3">{s._count.attendances}</td>
-          </tr>
-        ))}
-      </DataTable>
+      <ErrorNotice message={lessons.error} />
 
-      <Pager page={data?.pagination.page ?? 1} totalPages={data?.pagination.totalPages ?? 1} onChange={setPage} />
+      {groupId && ym && !lessons.loading && rows.length === 0 && !lessons.error && (
+        <div className="card flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+          <span>
+            {t("lesson.noPlan")} ({monthLabel(ym.year, ym.month, locale)})
+          </span>
+          <Link href="/dashboard/academic/lesson-formation" className="btn-primary">
+            {t("lesson.formNow")}
+          </Link>
+        </div>
+      )}
 
-      <Modal open={genOpen} title={t("sessions.generate")} onClose={() => setGenOpen(false)}>
-        <form onSubmit={handleGenerate} className="space-y-3">
-          <ErrorNotice message={genError} />
-          <p className="text-sm text-black/60 dark:text-white/60">
-            Materializes weekly schedule slots into dated sessions for the selected range. Safe to run repeatedly —
-            already-generated sessions are skipped.
-          </p>
-          <Field label={t("common.from")} required>
-            {(id) => (
-              <input id={id} type="date" className="input" value={genFrom} onChange={(e) => setGenFrom(e.target.value)} required />
-            )}
-          </Field>
-          <Field label={t("common.to")} required>
-            {(id) => (
-              <input id={id} type="date" className="input" value={genTo} onChange={(e) => setGenTo(e.target.value)} required />
-            )}
-          </Field>
-          {genResult && (
-            <p className="text-sm text-emerald-600 dark:text-emerald-400">
-              Created {genResult.created}, skipped {genResult.skipped} (already existed).
-            </p>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" className="btn-secondary" onClick={() => setGenOpen(false)}>
-              {t("common.cancel")}
-            </button>
-            <button type="submit" className="btn-primary" disabled={generating}>
-              {generating ? t("common.loading") : t("sessions.generate")}
-            </button>
+      {rows.length > 0 && (
+        <div className="card p-4">
+          <p className="mb-2 text-sm font-medium">{t("lesson.pickLesson")}</p>
+          <div className="flex flex-wrap gap-2">
+            {rows.map((row) => {
+              const selected = row.id === lessonId;
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => setLessonId(row.id)}
+                  aria-pressed={selected}
+                  className={`min-w-[8.5rem] rounded-lg border px-3 py-2 text-start text-sm transition ${
+                    selected
+                      ? "border-tecno-gold bg-tecno-gold/10"
+                      : "border-black/10 hover:bg-black/5 dark:border-white/10 dark:hover:bg-white/5"
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {row.lessonNumber !== null ? fmt(t("lesson.label"), { n: row.lessonNumber }) : t("lesson.legacy")}
+                    </span>
+                    <Badge tone={statusTone(row.status)}>{t(`lesson.status.${row.status}` as Parameters<typeof t>[0])}</Badge>
+                  </span>
+                  <span className="mt-0.5 block text-xs text-black/55 dark:text-white/55">
+                    {weekdayLabel(row.date, locale)} {formatLessonDate(row.date)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        </form>
-      </Modal>
+        </div>
+      )}
+
+      {lessonId && <LessonReportView key={lessonId} sessionId={lessonId} onNavigate={setLessonId} onChanged={lessons.reload} />}
     </div>
+  );
+}
+
+export default function LessonsPage() {
+  return (
+    <Suspense fallback={null}>
+      <LessonsInner />
+    </Suspense>
   );
 }

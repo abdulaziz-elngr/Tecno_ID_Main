@@ -75,13 +75,24 @@ export function allocatePayment(amount: number, targets: AllocationTarget[]): Al
   return { allocations, unallocated: round2(left) };
 }
 
+/**
+ * Resolves the monthly subscription fee configured for a Stage
+ * (Settings → Subscription Fees, spec §17). Fees are never
+ * hard-coded — this always reads the currently-active
+ * SubscriptionFee row for the stage, using the most recent
+ * effectiveFrom date that is not in the future relative to `asOf`.
+ * Returns null if no fee has been configured yet for that stage.
+ */
+export async function currentStageFee(stageId: string, asOf: Date = new Date()) {
+  return db.subscriptionFee.findFirst({
+    where: { stageId, isActive: true, effectiveFrom: { lte: asOf } },
+    orderBy: { effectiveFrom: "desc" }
+  });
+}
+
 export function collectionRate(collected: number, billed: number): number {
   if (billed <= 0) return 0;
   return Math.round((collected / billed) * 1000) / 10;
-}
-
-export function netIncome(revenue: number, expenses: number): number {
-  return round2(revenue - expenses);
 }
 
 /**

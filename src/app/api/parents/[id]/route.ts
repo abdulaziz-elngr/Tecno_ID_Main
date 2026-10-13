@@ -3,10 +3,13 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission, ForbiddenError, UnauthorizedError } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { isParentSharedWithOtherOrg } from "@/lib/scope";
+import { parentWhatsappSchema, toStoredWhatsappNumber } from "@/lib/student-parent";
 
 const updateParentSchema = z.object({
   fullName: z.string().trim().min(2).max(200).optional(),
-  whatsappNumber: z.string().trim().max(30).optional(),
+  // Same rule as student enrollment: must be a valid number, stored as international digits.
+  whatsappNumber: parentWhatsappSchema.optional(),
   preferredLanguage: z.enum(["ar", "en"]).optional(),
   notificationsEnabled: z.boolean().optional()
 });
@@ -71,6 +74,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     } catch {
       return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
     }
+    // `Parent.phone` is the unique identifier of the guardian (siblings and other
+    // students are linked through it) — it is never editable here. Say so
+    // explicitly instead of silently ignoring the field.
+    if (typeof body === "object" && body !== null && "phone" in body) {
+      return NextResponse.json(
+        {
+          error: "A parent's phone number identifies them and cannot be changed.",
+          details: { fieldErrors: { phone: ["A parent's phone number cannot be changed."] } }
+        },
+        { status: 400 }
+      );
+    }
+
     const parsed = updateParentSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
@@ -79,7 +95,23 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       );
     }
 
-    const updated = await db.parent.update({ where: { id: existing.id }, data: parsed.data });
+    // Parent rows are global; refuse to rewrite contact data that another
+    // organization's students also depend on.
+    if (await isParentSharedWithOtherOrg(existing.id, ctx.organizationId)) {
+      return NextResponse.json(
+        { error: "This guardian is also linked to another center and cannot be edited here." },
+        { status: 409 }
+      );
+    }
+
+    const { whatsappNumber, ...rest } = parsed.data;
+    const updated = await db.parent.update({
+      where: { id: existing.id },
+      data: {
+        ...rest,
+        ...(whatsappNumber !== undefined ? { whatsappNumber: toStoredWhatsappNumber(whatsappNumber) } : {})
+      }
+    });
 
     await writeAuditLog({
       organizationId: ctx.organizationId,

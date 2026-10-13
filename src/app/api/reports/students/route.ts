@@ -19,6 +19,8 @@ import { toDateOnly } from "@/lib/sessions";
 
 const querySchema = z.object({
   branchId: z.string().uuid().optional(),
+  stageId: z.string().uuid().optional(),
+  gradeId: z.string().uuid().optional(),
   groupId: z.string().uuid().optional(),
   from: z.string().date().optional(),
   to: z.string().date().optional(),
@@ -50,7 +52,9 @@ export async function GET(request: NextRequest) {
         deletedAt: null,
         status: "ACTIVE",
         ...(branchIds ? { branchId: { in: branchIds } } : {}),
-        ...(query.groupId ? { groupStudents: { some: { groupId: query.groupId } } } : {})
+        ...(query.groupId ? { groupId: query.groupId } : {}),
+        ...(query.gradeId ? { gradeId: query.gradeId } : {}),
+        ...(query.stageId ? { stageId: query.stageId } : {})
       },
       take: query.limit,
       select: {

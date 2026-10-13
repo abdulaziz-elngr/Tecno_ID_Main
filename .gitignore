@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+next-env.d.ts
+
+# secrets — never commit real environment files (only .env.example)
+.env
+.env.*
+!.env.example
+
+# local uploads (STORAGE_PROVIDER=local, development only)
+storage/
+
+# vercel
+.vercel/
+
+# misc
+*.log
+*.pem
+.DS_Store
+dist/
+coverage/
+*.tsbuildinfo

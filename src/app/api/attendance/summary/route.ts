@@ -15,9 +15,9 @@ import { attendanceRate } from "@/lib/attendance";
 const querySchema = z.object({
   branchId: z.string().uuid().optional(),
   groupId: z.string().uuid().optional(),
-  subjectId: z.string().uuid().optional(),
+  gradeId: z.string().uuid().optional(),
   teacherId: z.string().uuid().optional(),
-  academicLevelId: z.string().uuid().optional(),
+  stageId: z.string().uuid().optional(),
   from: z.string().date().optional(),
   to: z.string().date().optional(),
   /** Number of trailing days for the trend series. */
@@ -37,12 +37,12 @@ export async function GET(request: NextRequest) {
     const sessionFilter = {
       date: { gte: from, lte: to },
       ...(query.teacherId ? { teacherId: query.teacherId } : {}),
-      ...(query.groupId || query.subjectId || query.academicLevelId
+      ...(query.groupId || query.gradeId || query.stageId
         ? {
             group: {
               ...(query.groupId ? { id: query.groupId } : {}),
-              ...(query.subjectId ? { subjectId: query.subjectId } : {}),
-              ...(query.academicLevelId ? { academicLevelId: query.academicLevelId } : {})
+              ...(query.gradeId ? { gradeId: query.gradeId } : {}),
+              ...(query.stageId ? { grade: { stageId: query.stageId } } : {})
             }
           }
         : {})
@@ -65,14 +65,17 @@ export async function GET(request: NextRequest) {
           ...sessionFilter
         }
       }),
-      db.groupStudent.count({
+      db.student.count({
         where: {
+          deletedAt: null,
+          status: "ACTIVE",
           group: {
             deletedAt: null,
             isActive: true,
             ...(branchIds ? { branchId: { in: branchIds } } : {}),
             ...(query.groupId ? { id: query.groupId } : {}),
-            ...(query.subjectId ? { subjectId: query.subjectId } : {})
+            ...(query.gradeId ? { gradeId: query.gradeId } : {}),
+            ...(query.stageId ? { grade: { stageId: query.stageId } } : {})
           }
         }
       })
@@ -134,7 +137,7 @@ export async function GET(request: NextRequest) {
     const groups = groupIds.length
       ? await db.group.findMany({
           where: { id: { in: groupIds } },
-          select: { id: true, name: true, subject: { select: { name: true } } }
+          select: { id: true, name: true, grade: { select: { name: true } } }
         })
       : [];
     const groupNames = new Map(groups.map((g) => [g.id, g]));
@@ -148,7 +151,7 @@ export async function GET(request: NextRequest) {
         return {
           groupId: id,
           groupName: groupNames.get(id)?.name ?? "—",
-          subjectName: groupNames.get(id)?.subject.name ?? "—",
+          gradeName: groupNames.get(id)?.grade.name ?? "—",
           present,
           absent,
           rate: attendanceRate(present, present + absent)

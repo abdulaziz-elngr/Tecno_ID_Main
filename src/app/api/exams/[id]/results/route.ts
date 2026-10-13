@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { handleApiError, ok, readJson, NotFoundError, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
 import { validateScore, InvalidScoreError } from "@/lib/grading";
+import { loadAccessibleGroup } from "@/lib/group-access";
 
 /**
  * Bulk grade entry (spec §26). Teachers enter a whole group at once;
@@ -41,6 +42,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       select: { id: true, maxScore: true, groupId: true, isPublished: true }
     });
     if (!exam) throw new NotFoundError("Exam not found.");
+    await loadAccessibleGroup(ctx, exam.groupId);
 
     const input = await readJson(request, bodySchema);
     const maxScore = Number(exam.maxScore);
@@ -64,12 +66,13 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       throw new BusinessRuleError("A reason is required when changing an existing grade.");
     }
 
-    // Students must belong to the exam's group.
-    const enrolled = await db.groupStudent.findMany({
+    // Students must belong to the exam's group. Student.groupId is the
+    // direct source of truth (there is no groupStudent join table).
+    const enrolled = await db.student.findMany({
       where: { groupId: exam.groupId },
-      select: { studentId: true }
+      select: { id: true }
     });
-    const enrolledIds = new Set(enrolled.map((e) => e.studentId));
+    const enrolledIds = new Set(enrolled.map((e) => e.id));
 
     try {
       for (const row of input.results) {

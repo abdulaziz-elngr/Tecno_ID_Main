@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { assertCanAssign } from "@/lib/scope";
 import { hashPassword } from "@/lib/password";
 import {
   BusinessRuleError,
@@ -121,6 +122,9 @@ export async function POST(request: NextRequest) {
         throw new BusinessRuleError("One or more branches are invalid for this organization.");
       }
     }
+
+    // Privilege-escalation guard (see src/lib/scope.ts).
+    await assertCanAssign(ctx, { roleIds: input.roleIds, branchIds: input.branchIds });
 
     const passwordHash = await hashPassword(input.password);
 

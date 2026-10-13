@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { assertCanAssign, assertCanManageUser } from "@/lib/scope";
 import { hashPassword, isPasswordStrongEnough } from "@/lib/password";
 import { revokeAllSessionsForUser } from "@/lib/session";
 import { BusinessRuleError, NotFoundError, handleApiError, ok, readJson } from "@/lib/api";
@@ -57,6 +58,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   try {
     const ctx = await requirePermission("users.manage");
     const before = await loadUser(ctx.organizationId, params.id);
+    await assertCanManageUser(ctx, before.id);
     const input = await readJson(request, updateSchema);
 
     if (input.roleIds) {
@@ -92,6 +94,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         throw new BusinessRuleError("One or more branches are invalid for this organization.");
       }
     }
+
+    // Privilege-escalation guard (see src/lib/scope.ts).
+    await assertCanAssign(ctx, { roleIds: input.roleIds, branchIds: input.branchIds });
 
     if (input.newPassword && !isPasswordStrongEnough(input.newPassword)) {
       throw new BusinessRuleError(
@@ -164,6 +169,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
   try {
     const ctx = await requirePermission("users.manage");
     const user = await loadUser(ctx.organizationId, params.id);
+    await assertCanManageUser(ctx, user.id);
     const { reason } = await readJson(request, z.object({ reason: z.string().trim().min(3).max(500) }));
 
     if (user.id === ctx.userId) {

@@ -13,7 +13,6 @@ import {
   getPaymentRules,
   setSetting
 } from "@/lib/settings";
-import { isWhatsAppConfigured } from "@/lib/whatsapp/provider";
 import { handleApiError, ok, readJson } from "@/lib/api";
 
 const SCOPE = "settings";
@@ -32,12 +31,9 @@ const updateSchema = z.object({
     .optional(),
   attendanceRules: z
     .object({
-      requireSameSubject: z.boolean().optional(),
-      requireSameAcademicLevel: z.boolean().optional(),
-      enforceCapacity: z.boolean().optional(),
-      maxMakeUpPerMonth: z.number().int().min(0).max(31).optional(),
-      makeUpWindowDays: z.number().int().min(0).max(365).optional(),
-      requireApproval: z.boolean().optional()
+      respectCapacity: z.boolean().optional(),
+      maxMakeUpsPerMonth: z.number().int().min(0).max(31).optional(),
+      maxDaysAfterOrigin: z.number().int().min(0).max(365).optional()
     })
     .optional(),
   lateThresholdMinutes: z.number().int().min(0).max(240).optional(),
@@ -79,11 +75,7 @@ export async function GET() {
       lateThresholdMinutes,
       paymentRules,
       analyticsThresholds,
-      defaults: { paymentRules: DEFAULT_PAYMENT_RULES },
-      integrations: {
-        // Never leak the token itself — only whether it is configured (§71).
-        whatsapp: { configured: isWhatsAppConfigured() }
-      }
+      defaults: { paymentRules: DEFAULT_PAYMENT_RULES }
     });
   } catch (err) {
     return handleApiError(SCOPE, err);

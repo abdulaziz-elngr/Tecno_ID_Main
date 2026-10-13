@@ -1,18 +1,16 @@
 import { type NextRequest } from "next/server";
-import { readFile } from "fs/promises";
-import path from "path";
 import { db } from "@/lib/db";
 import { getAuthContext, UnauthorizedError } from "@/lib/rbac";
+import { readObject } from "@/lib/storage";
 import { NotFoundError, handleApiError } from "@/lib/api";
 
 const SCOPE = "files.serve";
 
-const STORAGE_DIR = process.env.STORAGE_LOCAL_DIR || path.join(process.cwd(), "storage", "uploads");
-
 /**
  * Authenticated file delivery (§62 — student data is never on a public URL).
  * The asset row also scopes the file to the caller's organization, so a
- * leaked key from another tenant is useless.
+ * leaked key from another tenant is useless. readObject() transparently
+ * reads from S3 or local disk depending on STORAGE_PROVIDER.
  */
 export async function GET(_request: NextRequest, { params }: { params: { key: string[] } }) {
   try {
@@ -25,10 +23,7 @@ export async function GET(_request: NextRequest, { params }: { params: { key: st
     });
     if (!asset) throw new NotFoundError("File not found.");
 
-    const target = path.join(STORAGE_DIR, asset.storageKey);
-    if (!target.startsWith(STORAGE_DIR)) throw new NotFoundError("File not found.");
-
-    const bytes = await readFile(target);
+    const bytes = await readObject(asset.storageKey);
     return new Response(new Uint8Array(bytes), {
       headers: {
         "Content-Type": asset.mimeType,

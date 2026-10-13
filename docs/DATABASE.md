@@ -12,7 +12,7 @@ Organization
   └─ Center
       └─ Branch
           ├─ Room
-          └─ Group ── Subject, AcademicLevel
+          └─ Group ── Subject (optional FK), Grade ── Stage
                 └─ GroupStudent ── Student
 ```
 
@@ -27,7 +27,7 @@ session via `requirePermission()` / `resolveBranchScope()` in
 - **Phase 1–2 (foundation)**: `Organization`, `Center`, `Branch`,
   `Room`, `User`, `Role`, `Permission`, `RolePermission`, `UserRole`,
   `UserBranch`, `Session`, `AcademicLevel`, `AcademicGrade`, `Subject`,
-  `Group`, `Schedule`, `Teacher`, `Student`, `Parent`, `StudentParent`,
+  `Group`, `Schedule`, `Teacher`, `TeacherSubject`, `Student`, `Parent`, `StudentParent`,
   `Employee`, `AuditLog`.
 - **Phase 5 — class sessions & attendance**: `ClassSession`,
   `Attendance`, `AttendanceAdjustment` (insert-only change trail).
@@ -88,83 +88,77 @@ has happened (every `db.<model>` call effectively becomes `any` and
 `tsc --noEmit` fills up with unrelated-looking implicit-`any` errors —
 that is the symptom, not a real bug in the affected files).
 
-## 5. Phase 2 — Stage / Grade / Group / classroom capacity
+## Stage 1 additions — Groups, Subjects, Teachers
 
-Migration:
-`prisma/migrations/20260920090000_phase2_stage_grade_relationships/migration.sql`.
+- `Group.subjectId` (nullable FK → `Subject`): Stage → Grade → Subject → Group.
+  Nullable only so groups that existed before this release keep working; the
+  API requires a subject for every NEW group and the UI flags legacy groups.
+- `Group` unique index is now `(gradeId, subjectId, name)` (was `(gradeId, name)`),
+  so "G1" can exist once per subject. Postgres treats NULL subjects as distinct,
+  so the API additionally rejects duplicate names (case-insensitive) per
+  grade+subject — including soft-deleted groups, which still occupy the index.
+- `Subject.code` (optional, unique per organization when set).
+- `TeacherSubject (teacherId, subjectId)`: which teachers teach which subject
+  (many-to-many, reuses the existing `Teacher` rows). `Group.teacherId` stays the
+  single source of truth for who runs a specific group; saving a group (or
+  assigning groups from the Teachers page) links that teacher to the group's
+  subject automatically, and a teacher who still runs a group of a subject
+  cannot be un-assigned from it.
+- Groups are never physically deleted when they have history: deletion is
+  allowed only if no students, sessions, attendance, exams, assignments or
+  subscriptions reference the group; otherwise archive (`isActive = false`).
+- Existing databases: apply `prisma/sql/2026-10-stage1-groups-subjects.sql`
+  (additive, idempotent). Fresh dev databases can use `prisma db push`.
 
-**New relationships**
+## Stage 2 additions — Lesson formation (تشكيل الحصص)
 
-- `Subject.academicLevelId` / `Subject.academicGradeId` — a Subject now
-  belongs to exactly one Stage (`AcademicLevel`) and one Grade
-  (`AcademicGrade`). Both columns are nullable at the database level
-  (see "Backward compatibility" below) but required by the API
-  (`src/app/api/subjects/route.ts`) for every new/edited subject.
-- `Group.academicGradeId` — a Group already had `academicLevelId`
-  (Stage) from Phase 1; it now also has a Grade. Same
-  nullable-at-the-DB / required-by-the-API pattern.
-- `Subject`'s uniqueness moved from `[organizationId, name]` to
-  `[organizationId, academicGradeId, name]` — the same subject name can
-  now exist once per Grade (e.g. "Mathematics" for First Secondary and
-  "Mathematics" for Second Secondary are two different rows).
+- `LessonPlan (groupId, year, month, lessonsPerWeek)` — one row per group per
+  calendar month (`@@unique([groupId, year, month])`), so re-forming a month can
+  never overwrite lesson history. Subject and teacher are **not** duplicated:
+  the subject comes from `Group.subjectId`; the teacher is copied onto every
+  `ClassSession.teacherId` at creation so history survives a later teacher change.
+- `ClassSession` gains nullable `planId` (FK → `LessonPlan`, `ON DELETE SET NULL`),
+  `lessonNumber` (1-based inside the plan), `openedById`, `closedById`. Existing
+  sessions keep `NULL` in all four and work exactly as before.
+  `@@unique([planId, lessonNumber])` keeps numbers unique per plan (NULLs never clash).
+- Lesson status reuses `SessionStatus`: `SCHEDULED → OPEN → COMPLETED` (or `CANCELLED`).
+  `COMPLETED` is final; `closedAt`/`closedById` record who closed it. A lesson is
+  never closed automatically when its time ends.
+- Lateness is now measured against the real start **instant**: `startMinutes` is the
+  centre's local wall-clock time (`Center.timezone`, default `Africa/Cairo`), converted
+  with `src/lib/tz.ts`. (Before Stage 2 it was read as UTC, shifting every LATE decision
+  by the UTC offset.)
+- Nothing is dropped or renamed; no attendance, student, payment, exam, recitation or
+  teacher row is touched. Existing databases: apply
+  `prisma/sql/2026-10-stage2-lesson-plans.sql` (additive, idempotent) after the Stage 1
+  script. Fresh dev databases can use `prisma db push`.
 
-**Referential integrity — trigger functions, not just app code**
+## Stage 3 — Exams, Recitation, Homework & Student performance
 
-A plain foreign key can only guarantee "this id exists in that table";
-it can't express "this Grade belongs to that Stage" or "this Group's
-real headcount fits its classroom". Those cross-column/cross-table
-rules are enforced with Postgres trigger functions, defined in the
-Phase 2 migration and summarized here:
+Additive only (script: `prisma/sql/2026-10-stage3-performance.sql`, idempotent — apply it after the
+Stage 1 and 2 scripts; fresh dev databases can use `prisma db push` + `npm run db:seed`).
 
-| Trigger | Table | Rule |
-|---|---|---|
-| `enforce_subject_grade_level_match` | `Subject` | The Grade must belong to the Subject's own Stage. |
-| `enforce_group_grade_level_match` | `Group` | The Grade must belong to the Group's own Stage. |
-| `enforce_group_subject_grade_match` | `Group` | The Group's Subject must belong to the same Grade as the Group. |
-| `enforce_group_capacity` | `GroupStudent` | Enrolling a student beyond the assigned classroom's real capacity is rejected. |
-| `enforce_group_room_capacity` | `Group` | Reassigning a Group to a smaller classroom than its current real headcount is rejected. |
-| `enforce_room_capacity_shrink` | `Room` | Shrinking a classroom below the largest group's real headcount is rejected. |
+- **`RecitationSession`** (new): one recitation per lesson of a group — `groupId`, `sessionId`
+  (→ `ClassSession`, unique), `date`, `maxScore`, optional `title`/`notes`.
+- **`Recitation.recitationSessionId`** (new, nullable FK): a student's recitation grade is a normal
+  `Recitation` row pointing at its `RecitationSession`; unique per `(recitationSessionId, studentId)`.
+  Old free-form rows keep it `NULL` and still work (tab "General records").
+- **`Assignment.sessionId`** (new, nullable FK → `ClassSession`): the lesson a homework belongs to.
+  Homework "Completed / Not completed" reuses `AssignmentSubmission.status`
+  (`SUBMITTED`/`LATE`/`GRADED` = completed, `MISSING` = not completed, `PENDING`/no row = not recorded).
+  New homework stores `maxScore = 0` (it is not graded). The older graded flow is kept in the
+  "Graded assignments (legacy)" tab.
+- **`StudentRecognition`** (new, insert-only): student, reason, date, notes, who recorded it.
+- **Exams**: no schema change. `ExamResult` already has `score` / `isAbsent` and a unique
+  `(examId, studentId)`; the new pages only add routes.
+- **Permissions**: `performance.view`, `performance.recognize` (granted by the script to
+  SUPER_ADMIN, CENTER_OWNER, MANAGER, TEACHER).
 
-The application layer (`src/lib/academic.ts`, `src/lib/capacity.ts`)
-performs the same checks first, purely so the person sees a specific,
-friendly error message instead of a raw database exception — the
-triggers are the non-bypassable backstop if any code path ever skips
-that layer.
+Scoring methodology for the Student performance page is documented in `src/lib/performance.ts`
+(exams 35 · attendance 25 · homework 20 · recitation 20, missing categories re-weighted, minimum
+samples, ≥ 2 categories to be ranked) and shown to users on the page.
 
-**Backward compatibility / existing data**
-
-No existing row is touched, deleted, or required to change. Every new
-column is nullable. A Subject or Group created before this migration
-keeps working exactly as it did, with `academicGradeId = NULL`. There
-is no reliable way to auto-infer a Stage/Grade for a subject that never
-recorded one, so none is guessed. To find every row that still needs
-manual assignment:
-
-```sql
-SELECT id, name FROM "Subject" WHERE "academicGradeId" IS NULL;
-SELECT id, name FROM "Group"   WHERE "academicGradeId" IS NULL;
-```
-
-The Subjects UI (`/dashboard/academic/subjects`) flags these with a
-"Needs Stage/Grade assignment" badge; saving the edit form requires
-both fields, which naturally backfills each row the next time an
-administrator touches it.
-
-**Real classroom capacity (spec item 5/6)**
-
-`GroupStudent` (enroll a student in a group) previously had no
-create/delete API at all — nothing in the codebase ever wrote to it, so
-"real enrolled student count" was always 0. Phase 2 adds
-`POST /api/groups/[id]/students` and
-`DELETE /api/groups/[id]/students/[studentId]`, which is what makes the
-capacity comparison in `src/lib/capacity.ts` (`evaluateCapacity`,
-`getRoomCapacityDetail`) meaningful, dynamic, and backed by real counts
-rather than the `Group.capacity` planning-target field.
-
-**Announcements (spec item 11)**
-
-`Announcement` / `AnnouncementRecipient` are new tables. A recipient
-list is materialized once, at creation time (e.g. a Group's roster on
-that day), so it stays a stable historical record even if the group's
-membership changes later.
-
+Access rule used by all the new routes (`src/lib/group-access.ts`): organization → branch scope →
+teachers/assistants without `academic.groups.manage` only reach the groups they teach.
+Parent phone numbers never leave the server: the API returns a ready `wa.me` link (or a "no
+parent" / "invalid number" flag); nothing is sent automatically.

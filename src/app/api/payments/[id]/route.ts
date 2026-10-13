@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { handleApiError, ok, readJson, NotFoundError, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
 import { computeSubscriptionStatus, round2 } from "@/lib/billing";
+import { getCenterProfile } from "@/lib/settings";
 
 /**
  * Financial correction workflows (spec §30, Rule 6).
@@ -38,7 +39,16 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } })
       },
       include: {
-        student: { select: { id: true, fullName: true, studentCode: true } },
+        student: {
+          select: {
+            id: true,
+            fullName: true,
+            studentCode: true,
+            stage: { select: { name: true } },
+            grade: { select: { name: true } },
+            group: { select: { name: true } }
+          }
+        },
         invoice: true,
         allocations: {
           include: {
@@ -51,8 +61,27 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     });
     if (!payment) throw new NotFoundError("Payment not found.");
 
+    const [cashier, refunder, center] = await Promise.all([
+      payment.recordedById
+        ? db.user.findUnique({ where: { id: payment.recordedById }, select: { fullName: true } })
+        : null,
+      payment.refundedById
+        ? db.user.findUnique({ where: { id: payment.refundedById }, select: { fullName: true } })
+        : null,
+      getCenterProfile(ctx.organizationId)
+    ]);
+
     return ok({
       ...payment,
+      cashierName: cashier?.fullName ?? null,
+      refundedByName: refunder?.fullName ?? null,
+      center: {
+        name: center.name,
+        logoUrl: center.logoUrl,
+        address: center.address,
+        phone: center.phone,
+        currency: center.currency
+      },
       amount: Number(payment.amount),
       refundedAmount: Number(payment.refundedAmount),
       allocations: payment.allocations.map((a) => ({
@@ -94,7 +123,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     });
     if (!payment) throw new NotFoundError("Payment not found.");
     if (payment.status === "VOIDED") {
-      throw new BusinessRuleError("This payment has already been voided.");
+      throw new BusinessRuleError("This payment has already been voided.", { status: 409, code: "ALREADY_VOIDED" });
+    }
+    if (payment.status === "REFUNDED") {
+      throw new BusinessRuleError("This payment has already been fully refunded.", { status: 409, code: "ALREADY_REFUNDED" });
     }
 
     const amount = Number(payment.amount);
@@ -113,6 +145,17 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       input.action === "VOID" ? round2(amount - alreadyRefunded) : round2(input.amount);
 
     const updated = await db.$transaction(async (tx) => {
+      // Optimistic guard: if another cashier refunded/voided this payment after we
+      // read it, nothing matches and we abort, so the same money can never be
+      // refunded twice.
+      const guard = await tx.payment.updateMany({
+        where: { id: payment.id, status: payment.status, refundedAmount: payment.refundedAmount },
+        data: { updatedAt: new Date() }
+      });
+      if (guard.count !== 1) {
+        throw new BusinessRuleError("This payment was just changed by someone else. Reload and try again.", { status: 409, code: "CONCURRENT_CHANGE" });
+      }
+
       // Reverse allocations proportionally, newest subscription first.
       let left = reversalTotal;
       for (const allocation of [...payment.allocations].reverse()) {
@@ -156,7 +199,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
           refundedAmount: nextRefunded,
           voidedById: input.action === "VOID" ? ctx.userId : payment.voidedById,
           voidedAt: input.action === "VOID" ? new Date() : payment.voidedAt,
-          voidReason: input.reason
+          voidReason: input.action === "VOID" ? input.reason : payment.voidReason,
+          ...(input.action === "REFUND"
+            ? { refundedById: ctx.userId, refundedAt: new Date(), refundReason: input.reason }
+            : {})
         }
       });
 

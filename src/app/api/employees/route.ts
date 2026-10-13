@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
 import { handleApiError, ok, created, readJson, readQuery, paginationSchema, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
+import { fullNameSchema, hireDateSchema, optionalPhoneSchema } from "@/lib/staff";
+import { positionSchema } from "@/lib/positions";
 
 const listSchema = paginationSchema.extend({
   branchId: z.string().uuid().optional(),
@@ -13,10 +15,10 @@ const listSchema = paginationSchema.extend({
 
 const createSchema = z.object({
   branchId: z.string().uuid(),
-  fullName: z.string().trim().min(2).max(200),
-  phone: z.string().trim().max(30).optional(),
-  position: z.string().trim().max(100).optional(),
-  hireDate: z.string().datetime().optional(),
+  fullName: fullNameSchema,
+  phone: optionalPhoneSchema,
+  position: positionSchema,
+  hireDate: hireDateSchema,
   photoUrl: z.string().url().max(500).optional()
 });
 
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
         : {})
     };
 
-    const [total, rows] = await Promise.all([
+    const [total, rows, usedPositions] = await Promise.all([
       db.employee.count({ where }),
       db.employee.findMany({
         where,
@@ -58,6 +60,15 @@ export async function GET(request: NextRequest) {
           isActive: true,
           branch: { select: { id: true, name: true } }
         }
+      }),
+      // Positions already in use in this scope, offered back as options in the
+      // form so custom positions ("Librarian") become reusable choices.
+      db.employee.findMany({
+        where: { organizationId: ctx.organizationId, deletedAt: null, position: { not: null }, ...(branchIds ? { branchId: { in: branchIds } } : {}) },
+        distinct: ["position"],
+        orderBy: { position: "asc" },
+        take: 100,
+        select: { position: true }
       })
     ]);
 
@@ -65,6 +76,7 @@ export async function GET(request: NextRequest) {
     // exposed to roles holding `employees.update` on the detail route.
     return ok({
       employees: rows,
+      positions: usedPositions.map((p) => p.position).filter((p): p is string => p !== null),
       pagination: {
         page: query.page,
         pageSize: query.pageSize,
@@ -93,10 +105,10 @@ export async function POST(request: NextRequest) {
         organizationId: ctx.organizationId,
         branchId: input.branchId,
         fullName: input.fullName,
-        phone: input.phone,
-        position: input.position,
+        phone: input.phone ?? null,
+        position: input.position ?? null,
         photoUrl: input.photoUrl,
-        hireDate: input.hireDate ? new Date(input.hireDate) : undefined
+        hireDate: input.hireDate ?? null
       }
     });
 

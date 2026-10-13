@@ -2,10 +2,14 @@ import { db } from "./db";
 import type { DayOfWeek } from "@prisma/client";
 
 /**
- * Scheduling conflict rules (spec §15):
+ * Scheduling conflict rules (spec §4):
  *   - A teacher cannot be assigned to two groups at the same time.
- *   - A room cannot contain two groups at the same time.
- *   - A group cannot have overlapping sessions with itself.
+ *   - A group cannot have overlapping/duplicate weekly schedules with
+ *     itself.
+ *
+ * There is no Room concept anywhere in this system — group capacity
+ * is the only capacity that exists, and scheduling conflicts are
+ * purely about the group itself and its assigned teacher.
  *
  * The overlap test itself is a pure function (easy to unit test
  * exhaustively without a database); `findScheduleConflicts` wraps it
@@ -36,7 +40,6 @@ export function isValidTimeRange(startMinutes: number, endMinutes: number): bool
 
 export interface ScheduleConflictInput extends TimeRange {
   groupId: string;
-  roomId: string | null;
   teacherId: string | null;
   assistantId: string | null;
   /** When updating an existing schedule row, exclude it from the conflict check. */
@@ -44,7 +47,7 @@ export interface ScheduleConflictInput extends TimeRange {
 }
 
 export interface ScheduleConflict {
-  type: "ROOM" | "TEACHER" | "GROUP";
+  type: "TEACHER" | "GROUP";
   scheduleId: string;
   groupId: string;
   groupName: string;
@@ -60,9 +63,9 @@ export async function findScheduleConflicts(
   };
 
   // Pull every active schedule on the same day that could plausibly
-  // overlap (same room OR same teacher/assistant OR same group), then
-  // do the precise overlap test in application code. Narrowing by day
-  // keeps this cheap even with a large schedule table.
+  // overlap (same group OR same teacher/assistant), then do the
+  // precise overlap test in application code. Narrowing by day keeps
+  // this cheap even with a large schedule table.
   const candidates = await db.schedule.findMany({
     where: {
       dayOfWeek: input.dayOfWeek,
@@ -70,7 +73,6 @@ export async function findScheduleConflicts(
       ...(input.excludeScheduleId ? { id: { not: input.excludeScheduleId } } : {}),
       OR: [
         { groupId: input.groupId },
-        ...(input.roomId ? [{ group: { roomId: input.roomId } }] : []),
         ...(input.teacherId
           ? [{ group: { teacherId: input.teacherId } }, { group: { assistantId: input.teacherId } }]
           : []),
@@ -79,7 +81,7 @@ export async function findScheduleConflicts(
           : [])
       ]
     },
-    include: { group: { select: { id: true, name: true, roomId: true, teacherId: true, assistantId: true } } }
+    include: { group: { select: { id: true, name: true, teacherId: true, assistantId: true } } }
   });
 
   const conflicts: ScheduleConflict[] = [];
@@ -100,14 +102,6 @@ export async function findScheduleConflicts(
         groupName: existing.group.name
       });
       continue;
-    }
-    if (input.roomId && existing.group.roomId === input.roomId) {
-      conflicts.push({
-        type: "ROOM",
-        scheduleId: existing.id,
-        groupId: existing.groupId,
-        groupName: existing.group.name
-      });
     }
     const teacherIds = [input.teacherId, input.assistantId].filter(Boolean);
     const existingTeacherIds = [existing.group.teacherId, existing.group.assistantId].filter(Boolean);

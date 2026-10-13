@@ -19,12 +19,7 @@ const DAY_ENUM = z.enum([
 const listQuerySchema = z.object({
   groupId: z.string().uuid().optional(),
   branchId: z.string().uuid().optional(),
-  dayOfWeek: DAY_ENUM.optional(),
-  academicLevelId: z.string().uuid().optional(),
-  academicGradeId: z.string().uuid().optional(),
-  subjectId: z.string().uuid().optional(),
-  teacherId: z.string().uuid().optional(),
-  roomId: z.string().uuid().optional()
+  dayOfWeek: DAY_ENUM.optional()
 });
 
 const timeString = z.string().refine((v) => timeStringToMinutes(v) !== null, {
@@ -68,45 +63,11 @@ function serializeSchedule(s: {
   startMinutes: number;
   endMinutes: number;
   isActive: boolean;
-  group?: {
-    id: string;
-    name: string;
-    capacity: number;
-    subject: { id: string; name: string } | null;
-    academicLevel: { id: string; name: string } | null;
-    academicGrade: { id: string; name: string } | null;
-    room: { id: string; name: string; capacity: number } | null;
-    teacher: { id: string; fullName: string } | null;
-    assistant: { id: string; fullName: string } | null;
-    _count?: { groupStudents: number };
-  };
 }) {
   return {
-    id: s.id,
-    groupId: s.groupId,
-    dayOfWeek: s.dayOfWeek,
-    startMinutes: s.startMinutes,
-    endMinutes: s.endMinutes,
-    isActive: s.isActive,
+    ...s,
     startTime: minutesToTimeString(s.startMinutes),
-    endTime: minutesToTimeString(s.endMinutes),
-    // Enriched weekly-schedule fields (spec item 7), all retrieved
-    // through real relational includes below — never duplicated/stored
-    // as free text on the Schedule row itself.
-    group: s.group
-      ? {
-          id: s.group.id,
-          name: s.group.name,
-          capacity: s.group.capacity,
-          studentCount: s.group._count?.groupStudents ?? 0
-        }
-      : null,
-    subject: s.group?.subject ?? null,
-    academicLevel: s.group?.academicLevel ?? null,
-    academicGrade: s.group?.academicGrade ?? null,
-    room: s.group?.room ?? null,
-    teacher: s.group?.teacher ?? null,
-    assistant: s.group?.assistant ?? null
+    endTime: minutesToTimeString(s.endMinutes)
   };
 }
 
@@ -128,14 +89,7 @@ export async function GET(request: NextRequest) {
         group: {
           deletedAt: null,
           branch: { center: { organizationId: ctx.organizationId } },
-          ...(branchIds ? { branchId: { in: branchIds } } : {}),
-          ...(parsed.data.academicLevelId ? { academicLevelId: parsed.data.academicLevelId } : {}),
-          ...(parsed.data.academicGradeId ? { academicGradeId: parsed.data.academicGradeId } : {}),
-          ...(parsed.data.subjectId ? { subjectId: parsed.data.subjectId } : {}),
-          ...(parsed.data.teacherId
-            ? { OR: [{ teacherId: parsed.data.teacherId }, { assistantId: parsed.data.teacherId }] }
-            : {}),
-          ...(parsed.data.roomId ? { roomId: parsed.data.roomId } : {})
+          ...(branchIds ? { branchId: { in: branchIds } } : {})
         }
       },
       include: {
@@ -143,14 +97,8 @@ export async function GET(request: NextRequest) {
           select: {
             id: true,
             name: true,
-            capacity: true,
-            subject: { select: { id: true, name: true } },
-            academicLevel: { select: { id: true, name: true } },
-            academicGrade: { select: { id: true, name: true } },
-            room: { select: { id: true, name: true, capacity: true } },
             teacher: { select: { id: true, fullName: true } },
-            assistant: { select: { id: true, fullName: true } },
-            _count: { select: { groupStudents: true } }
+            assistant: { select: { id: true, fullName: true } }
           }
         }
       },
@@ -197,10 +145,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid group." }, { status: 400 });
     }
 
-    // Rule 10: prevent teacher/room/group scheduling conflicts.
+    // Spec §4: prevent teacher/group scheduling conflicts (no rooms).
     const conflicts = await findScheduleConflicts({
       groupId: input.groupId,
-      roomId: group.roomId,
       teacherId: group.teacherId,
       assistantId: group.assistantId,
       dayOfWeek: input.dayOfWeek,
@@ -209,19 +156,13 @@ export async function POST(request: NextRequest) {
     });
 
     if (conflicts.length > 0) {
-      const conflictDetails = conflicts.map((c) => ({
-        type: c.type,
-        conflictingGroup: c.groupName
-      }));
       return NextResponse.json(
         {
           error: "This time slot conflicts with an existing schedule.",
-          // Kept at both the top level (backward compatibility with any
-          // existing raw-fetch callers) and under `details` (the field
-          // the shared apiPost/apiPatch client helpers actually surface
-          // to the UI — see src/lib/client.ts).
-          conflicts: conflictDetails,
-          details: { conflicts: conflictDetails }
+          conflicts: conflicts.map((c) => ({
+            type: c.type,
+            conflictingGroup: c.groupName
+          }))
         },
         { status: 409 }
       );

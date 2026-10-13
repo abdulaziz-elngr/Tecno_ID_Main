@@ -55,7 +55,9 @@ export async function GET(request: NextRequest) {
               fullName: true,
               studentCode: true,
               photoUrl: true,
-              status: true
+              status: true,
+              groupId: true,
+              group: { select: { name: true } }
             }
           })
         : [],
@@ -80,7 +82,9 @@ export async function GET(request: NextRequest) {
               name: insensitive
             },
             take: query.limit,
-            select: { id: true, name: true, subject: { select: { name: true } } }
+            // Group has no direct Subject relation (Subject only connects to
+            // a Group indirectly, through Exam) — surface the grade instead.
+            select: { id: true, name: true, grade: { select: { name: true } } }
           })
         : [],
       ctx.permissions.has("parents.view")

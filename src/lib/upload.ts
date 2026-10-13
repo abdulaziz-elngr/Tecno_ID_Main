@@ -26,7 +26,9 @@ export const ALLOWED_DOCUMENT_TYPES: Record<string, string[]> = {
 };
 
 export const MAX_IMAGE_BYTES = Number(process.env.MAX_UPLOAD_IMAGE_BYTES || 3 * 1024 * 1024);
-export const MAX_DOCUMENT_BYTES = Number(process.env.MAX_UPLOAD_DOC_BYTES || 10 * 1024 * 1024);
+// Default 4 MB: Vercel serverless functions reject request/response bodies
+// above ~4.5 MB, and uploads and downloads both pass through a function.
+export const MAX_DOCUMENT_BYTES = Number(process.env.MAX_UPLOAD_DOC_BYTES || 4 * 1024 * 1024);
 
 const MAGIC_NUMBERS: { type: string; bytes: number[]; offset?: number }[] = [
   { type: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },

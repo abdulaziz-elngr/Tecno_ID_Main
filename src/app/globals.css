@@ -54,4 +54,86 @@ body {
     background: #ffffff !important;
     color: #000000 !important;
   }
+
+  /* Student barcode sticker (spec §6): page size, orientation and margins come
+     from the browser's print dialog / printer settings, NOT from the app.
+     No fixed height and no forced @page rule, so nothing gets clipped. */
+  .student-sticker {
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 1mm !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+    container-type: inline-size;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    page-break-after: avoid;
+  }
+  /* Everything inside is sized relative to the sticker's width (cqw), so the
+     content shrinks/grows with the paper size and always fits on ONE page. */
+  .student-sticker p {
+    font-size: 7cqw !important;
+    line-height: 1.15 !important;
+    margin: 0 !important;
+  }
+  .student-sticker figure {
+    padding: 0 !important;
+    margin: 1cqw 0 0 !important;
+  }
+  .student-sticker svg {
+    height: 20cqw !important;
+  }
+  .student-sticker figcaption {
+    font-size: 6cqw !important;
+    margin-top: 1cqw !important;
+    letter-spacing: 0.2em !important;
+  }
+  html:has(.student-sticker),
+  html:has(.student-sticker) body,
+  html:has(.student-sticker) main {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+  }
+
+  /* Thermal receipt layout (spec §19) — narrow roll width. */
+  .print-receipt {
+    width: 80mm !important;
+    max-width: 80mm !important;
+  }
+}
+
+/* Lesson report (Stage 2): readable black-on-white paper output even when the
+   app is in dark mode. Scoped to .print-report so nothing else is affected. */
+@media print {
+  .print-report,
+  .print-report * {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-color: #888 !important;
+  }
+  .print-report .card {
+    border: none !important;
+  }
+  .print-report table {
+    break-inside: auto;
+  }
+  .print-report tr {
+    break-inside: avoid;
+  }
+  .print-report section {
+    break-inside: avoid-page;
+  }
+  main {
+    padding: 0 !important;
+  }
 }

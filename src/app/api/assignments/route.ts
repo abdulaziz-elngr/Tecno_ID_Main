@@ -13,6 +13,7 @@ const listSchema = paginationSchema.extend({
 
 const createSchema = z.object({
   groupId: z.string().uuid(),
+  subjectId: z.string().trim().max(100).optional(),
   title: z.string().trim().min(2).max(200),
   description: z.string().trim().max(2000).optional(),
   dueDate: z.string().datetime(),
@@ -47,7 +48,7 @@ export async function GET(request: NextRequest) {
           title: true,
           dueDate: true,
           maxScore: true,
-          group: { select: { id: true, name: true, subject: { select: { name: true } } } },
+          group: { select: { id: true, name: true, grade: { select: { name: true, stage: { select: { name: true } } } } } },
           _count: { select: { submissions: true } }
         }
       })
@@ -81,8 +82,7 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         branchId: true,
-        subjectId: true,
-        groupStudents: { select: { studentId: true } }
+        students: { where: { deletedAt: null }, select: { id: true } }
       }
     });
     if (!group) throw new BusinessRuleError("Invalid group.", { status: 400 });
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
           organizationId: ctx.organizationId,
           branchId: group.branchId,
           groupId: group.id,
-          subjectId: group.subjectId,
+          subjectId: input.subjectId,
           title: input.title,
           description: input.description,
           dueDate: new Date(input.dueDate),
@@ -103,11 +103,11 @@ export async function POST(request: NextRequest) {
         }
       });
 
-      if (input.createSubmissions && group.groupStudents.length > 0) {
+      if (input.createSubmissions && group.students.length > 0) {
         await tx.assignmentSubmission.createMany({
-          data: group.groupStudents.map((gs) => ({
+          data: group.students.map((s) => ({
             assignmentId: row.id,
-            studentId: gs.studentId,
+            studentId: s.id,
             status: "PENDING" as const
           })),
           skipDuplicates: true

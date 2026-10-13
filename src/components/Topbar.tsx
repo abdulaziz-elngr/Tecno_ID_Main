@@ -29,7 +29,7 @@ export function Topbar() {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-black/5 bg-white px-4 py-3 dark:border-white/10 dark:bg-surface-dark-muted">
+    <header className="no-print flex items-center justify-between border-b border-black/5 bg-white px-4 py-3 dark:border-white/10 dark:bg-surface-dark-muted">
       <div className="text-sm text-black/60 dark:text-white/60">
         {me ? `${me.fullName} — ${me.roles.join(", ")}` : "\u00A0"}
       </div>

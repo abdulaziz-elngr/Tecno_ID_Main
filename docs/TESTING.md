@@ -19,6 +19,11 @@ npm run test:watch
 | `src/lib/scheduling.test.ts` | `rangesOverlap`, `isValidTimeRange` | schedule conflict detection |
 | `src/lib/student-code.test.ts` | code generation | unique student code format |
 | `src/lib/time.test.ts` | time helpers | minute/time formatting |
+| `src/lib/group-rules.test.ts` | `evaluateGroupDeletion`, `describeGroupBlockers`, `normalizeSubjectCode` | a group can only be deleted when nothing depends on it; otherwise it must be archived |
+| `src/lib/subject-summary.test.ts` | `mergeSubjectTeachers`, `summarizeSubjectGroups` | Subject → Teacher → Groups → Students aggregation, no duplicate teachers |
+| `src/lib/lesson-plan.test.ts` | `generateMonthlyLessons`, `validateConfirmedLessons`, `startOfWeek` | real calendar dates for a month from the group's weekly slots (October 2026 Sat+Tue), 1 vs 2 lessons/week, weeks that straddle two months, cap at the group's slots, server-side guard on the reviewed selection |
+| `src/lib/lesson-flow.test.ts` | `canOpenLesson`, `nextLesson`, `canCloseLesson`, `isPlanDeletable`, tz helpers | lessons open in order, one open lesson per group, only an explicit close completes a lesson, history is never deletable, lateness uses the centre's local start time (Cairo DST) |
+| `src/lib/lesson-snapshot.test.ts` | `resolveFeeState`, `isFeeUnpaid`, `buildSnapshotWarnings`, `countAttendance` | fee state per group/month, unpaid definition, student scan-card warnings, attendance counts |
 | `src/lib/attendance.test.ts` | `evaluateAttendance`, `attendanceRate`, `normalizeScanInput` | Rule 1 (no duplicates), Rule 2 (make-up eligibility), Rule 3 (make-up limits/window/approval), Rule 9 (capacity), late detection |
 | `src/lib/billing.test.ts` | `round2`, `netDue`, `remainingAmount`, `computeSubscriptionStatus`, `allocatePayment`, `collectionRate`, `netIncome` | money rounding, subscription status derivation, oldest-first payment allocation (Rule 6 — never over-allocates) |
 | `src/lib/grading.test.ts` | `validateScore`, `percentage`, `computeExamStatistics`, `rankScores`, `performanceTrend` | Rule 8 (score can't exceed max), exam statistics, competition ranking with ties, trend slope |

@@ -1,5 +1,6 @@
 import { db } from "./db";
 import type { DayOfWeek } from "@prisma/client";
+import { DEFAULT_TIME_ZONE, sessionStartInstant } from "./tz";
 
 /**
  * Turns recurring weekly Schedule rows into concrete, dated
@@ -21,7 +22,8 @@ const DAY_INDEX: DayOfWeek[] = [
 ];
 
 export function dayOfWeekFromDate(date: Date): DayOfWeek {
-  // getUTCDay() always returns 0-6, so this index is always in range.
+  // getUTCDay() always returns 0–6, which is always a valid index into
+  // DAY_INDEX (7 entries), so the non-null assertion is safe here.
   return DAY_INDEX[date.getUTCDay()]!;
 }
 
@@ -85,7 +87,6 @@ export async function generateSessions(
         select: {
           id: true,
           branchId: true,
-          roomId: true,
           teacherId: true,
           assistantId: true
         }
@@ -102,7 +103,6 @@ export async function generateSessions(
     scheduleId: string;
     teacherId: string | null;
     assistantId: string | null;
-    roomId: string | null;
     date: Date;
     startMinutes: number;
     endMinutes: number;
@@ -119,7 +119,6 @@ export async function generateSessions(
         scheduleId: schedule.id,
         teacherId: schedule.group.teacherId,
         assistantId: schedule.group.assistantId,
-        roomId: schedule.group.roomId,
         date: day,
         startMinutes: schedule.startMinutes,
         endMinutes: schedule.endMinutes
@@ -138,14 +137,17 @@ export async function generateSessions(
   };
 }
 
-/** Minutes elapsed since a session's scheduled start, at `now`. */
+/**
+ * Minutes elapsed since a session's scheduled start, at `now` (can be
+ * negative before the start). Start time is local wall-clock time of the
+ * centre, so it is converted with the centre's time zone — see tz.ts.
+ */
 export function minutesAfterStart(
   sessionDate: Date,
   startMinutes: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  timeZone: string = DEFAULT_TIME_ZONE
 ): number {
-  const start = new Date(sessionDate);
-  start.setUTCHours(0, 0, 0, 0);
-  const startMs = start.getTime() + startMinutes * 60 * 1000;
-  return Math.round((now.getTime() - startMs) / 60000);
+  const start = sessionStartInstant(sessionDate, startMinutes, timeZone);
+  return Math.round((now.getTime() - start.getTime()) / 60000);
 }

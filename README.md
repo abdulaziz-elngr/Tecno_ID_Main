@@ -54,6 +54,10 @@ Edit `.env` and set at minimum:
 npm run prisma:migrate
 ```
 
+> **Upgrading an existing database?** Apply the additive, idempotent script
+> `prisma/sql/2026-10-stage1-groups-subjects.sql` (adds `Group.subjectId`,
+> `Subject.code` and the `TeacherSubject` table). See `docs/DATABASE.md`.
+
 ### 5. Seed demo data (development only)
 
 ```bash
@@ -122,5 +126,12 @@ reading:
 - `docs/DEPLOYMENT.md` — build/deploy steps, including the
   `prisma generate` network-dependency caveat
 - `docs/BACKUP.md` — backup/restore procedure
-- `docs/WHATSAPP.md` — queue worker setup and configuration
+- `docs/WHATSAPP.md` — wa.me click-to-chat links (no API, no configuration)
 - `docs/TESTING.md` — what's covered by the test suite
+
+## Payments (Stage 1)
+
+- **Prices:** Subscriptions → Academic Stage → Grade → monthly price. Changing a price appends a new `GradeFee` row; existing `Subscription`/`Payment` rows are never touched.
+- **Collect:** Payments → Collect (Month → Stage → Grade → Group → search / scan). The API (`POST /api/payments/month`) refuses a month while an earlier one is unpaid (`409 OUT_OF_ORDER`) and a month already paid (`409 ALREADY_PAID`).
+- **Records:** Finance → Payment Records (paid / not paid, Excel export, WhatsApp click-to-chat links — no WhatsApp API).
+- **Existing database:** run `prisma/sql/2026-10-payments-stage1.sql` once before deploying (additive, idempotent). Expense/UtilityBill tables are kept untouched; only their UI/API were removed.

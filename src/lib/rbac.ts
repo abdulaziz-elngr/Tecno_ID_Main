@@ -38,7 +38,7 @@ export class ForbiddenError extends Error {
   }
 }
 
-const ORG_WIDE_ROLES = new Set(["SUPER_ADMIN", "CENTER_OWNER"]);
+export const ORG_WIDE_ROLES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "CENTER_OWNER"]);
 
 export async function getAuthContext(): Promise<AuthContext | null> {
   const payload = await getSessionPayload();
@@ -86,6 +86,20 @@ export async function requirePermission(permissionKey: string): Promise<AuthCont
   if (!ctx) throw new UnauthorizedError();
   if (!ctx.permissions.has(permissionKey)) {
     throw new ForbiddenError(`Missing permission: ${permissionKey}`);
+  }
+  return ctx;
+}
+
+/**
+ * Like `requirePermission`, but passes when the user holds AT LEAST ONE of the
+ * given keys. Use for read-only lookups (e.g. the group list) that several
+ * different roles legitimately need.
+ */
+export async function requireAnyPermission(permissionKeys: readonly string[]): Promise<AuthContext> {
+  const ctx = await getAuthContext();
+  if (!ctx) throw new UnauthorizedError();
+  if (!permissionKeys.some((key) => ctx.permissions.has(key))) {
+    throw new ForbiddenError(`Missing permission: one of ${permissionKeys.join(", ")}`);
   }
   return ctx;
 }

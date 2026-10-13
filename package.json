@@ -18,17 +18,21 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@node-rs/argon2": "^2.2.1",
     "@prisma/client": "^5.19.1",
-    "argon2": "^0.41.1",
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
+    "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
     "jose": "^5.9.3",
-    "next": "14.2.13",
+    "nanoid": "^5.0.7",
+    "next": "^14.2.35",
     "next-themes": "^0.3.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zod": "^3.23.8",
-    "nanoid": "^5.0.7",
-    "clsx": "^2.1.1"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
@@ -42,12 +46,5 @@
     "tsx": "^4.19.1",
     "typescript": "^5.5.4",
     "vitest": "^2.1.1"
-  },
-  "allowScripts": {
-    "argon2": true,
-    "@prisma/client": true,
-    "@prisma/engines": true,
-    "prisma": true,
-    "esbuild": true
   }
 }

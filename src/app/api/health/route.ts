@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
 import { NextResponse } from "next/server";
-import { isWhatsAppConfigured } from "@/lib/whatsapp/provider";
 
 /**
  * Health endpoint for load balancers and uptime monitors (spec §49).
@@ -20,7 +19,6 @@ export async function GET() {
 
   const redisUrl = process.env.REDIS_URL;
   checks.redis = redisUrl ? { status: "up" } : { status: "not_configured" };
-  checks.whatsapp = isWhatsAppConfigured() ? { status: "up" } : { status: "not_configured" };
 
   const healthy = checks.database.status === "up";
 

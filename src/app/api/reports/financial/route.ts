@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
 import { handleApiError, ok, readQuery } from "@/lib/api";
-import { collectionRate, netIncome, round2 } from "@/lib/billing";
+import { collectionRate, round2 } from "@/lib/billing";
 import { toCsv, csvResponse } from "@/lib/csv";
 import { writeAuditLog } from "@/lib/audit";
 
@@ -13,7 +13,7 @@ const querySchema = z.object({
   from: z.string().date(),
   to: z.string().date(),
   branchId: z.string().uuid().optional(),
-  groupBy: z.enum(["day", "month", "group", "subject", "category"]).default("month"),
+  groupBy: z.enum(["day", "month", "group", "grade"]).default("month"),
   format: z.enum(["json", "csv"]).default("json")
 });
 
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const to = new Date(`${query.to}T23:59:59.999Z`);
     const branchFilter = branchIds ? { in: branchIds } : undefined;
 
-    const [payments, expenses, billed] = await Promise.all([
+    const [payments, billed] = await Promise.all([
       db.payment.findMany({
         where: {
           organizationId: ctx.organizationId,
@@ -49,16 +49,6 @@ export async function GET(request: NextRequest) {
         },
         take: 50000
       }),
-      db.expense.findMany({
-        where: {
-          organizationId: ctx.organizationId,
-          deletedAt: null,
-          spentAt: { gte: from, lte: to },
-          ...(branchFilter ? { branchId: branchFilter } : {})
-        },
-        select: { spentAt: true, amount: true, category: true },
-        take: 50000
-      }),
       db.subscription.aggregate({
         where: {
           organizationId: ctx.organizationId,
@@ -72,31 +62,25 @@ export async function GET(request: NextRequest) {
     const revenue = round2(
       payments.reduce((sum, p) => sum + Number(p.amount) - Number(p.refundedAmount), 0)
     );
-    const expenseTotal = round2(expenses.reduce((sum, e) => sum + Number(e.amount), 0));
     const billedTotal = round2(
       Number(billed._sum.amount ?? 0) - Number(billed._sum.discount ?? 0)
     );
 
-    const rows: { key: string; revenue: number; expenses: number }[] = [];
-    const bucket = new Map<string, { revenue: number; expenses: number }>();
-    const add = (key: string, field: "revenue" | "expenses", value: number) => {
-      const current = bucket.get(key) ?? { revenue: 0, expenses: 0 };
-      current[field] = round2(current[field] + value);
+    const rows: { key: string; revenue: number }[] = [];
+    const bucket = new Map<string, { revenue: number }>();
+    const add = (key: string, value: number) => {
+      const current = bucket.get(key) ?? { revenue: 0 };
+      current.revenue = round2(current.revenue + value);
       bucket.set(key, current);
     };
 
     if (query.groupBy === "day" || query.groupBy === "month") {
       const slice = query.groupBy === "day" ? 10 : 7;
       for (const p of payments) {
-        add(p.paidAt.toISOString().slice(0, slice), "revenue", Number(p.amount) - Number(p.refundedAmount));
+        add(p.paidAt.toISOString().slice(0, slice), Number(p.amount) - Number(p.refundedAmount));
       }
-      for (const e of expenses) {
-        add(e.spentAt.toISOString().slice(0, slice), "expenses", Number(e.amount));
-      }
-    } else if (query.groupBy === "category") {
-      for (const e of expenses) add(e.category, "expenses", Number(e.amount));
     } else {
-      // Revenue by group (or by that group's subject).
+      // Revenue by group (or by that group's grade).
       const groupIds = new Set<string>();
       for (const p of payments) {
         for (const a of p.allocations) {
@@ -106,18 +90,18 @@ export async function GET(request: NextRequest) {
       const groups = groupIds.size
         ? await db.group.findMany({
             where: { id: { in: [...groupIds] } },
-            select: { id: true, name: true, subject: { select: { name: true } } }
+            select: { id: true, name: true, grade: { select: { name: true } } }
           })
         : [];
       const labelById = new Map(
-        groups.map((g) => [g.id, query.groupBy === "subject" ? g.subject.name : g.name])
+        groups.map((g) => [g.id, query.groupBy === "grade" ? g.grade.name : g.name])
       );
       for (const p of payments) {
         for (const a of p.allocations) {
           const label = a.subscription.groupId
             ? labelById.get(a.subscription.groupId) ?? "—"
             : "Unallocated";
-          add(label, "revenue", Number(a.amount));
+          add(label, Number(a.amount));
         }
       }
     }
@@ -139,7 +123,7 @@ export async function GET(request: NextRequest) {
       });
       return csvResponse(
         `financial-${query.from}-to-${query.to}.csv`,
-        toCsv(rows.map((r) => ({ ...r, net: round2(r.revenue - r.expenses) })))
+        toCsv(rows)
       );
     }
 
@@ -155,8 +139,6 @@ export async function GET(request: NextRequest) {
       range: { from: query.from, to: query.to },
       summary: {
         revenue,
-        expenses: expenseTotal,
-        netIncome: netIncome(revenue, expenseTotal),
         billed: billedTotal,
         collected: Number(billed._sum.paidAmount ?? 0),
         outstanding: round2(billedTotal - Number(billed._sum.paidAmount ?? 0)),

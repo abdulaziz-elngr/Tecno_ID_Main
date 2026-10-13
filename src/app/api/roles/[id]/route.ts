@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { assertCanEditRole } from "@/lib/scope";
 import { ALL_PERMISSION_KEYS } from "@/lib/permissions";
 import { BusinessRuleError, NotFoundError, handleApiError, ok, readJson } from "@/lib/api";
 
@@ -48,6 +49,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const ctx = await requirePermission("roles.manage");
     const role = await loadRole(ctx.organizationId, params.id);
     const input = await readJson(request, updateSchema);
+    assertCanEditRole(ctx, role, input.permissionKeys);
 
     if (input.permissionKeys) {
       const unknown = input.permissionKeys.filter((k) => !ALL_PERMISSION_KEYS.includes(k));
@@ -102,6 +104,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     const ctx = await requirePermission("roles.manage");
     const role = await loadRole(ctx.organizationId, params.id);
     const { reason } = await readJson(request, z.object({ reason: z.string().trim().min(3).max(500) }));
+    assertCanEditRole(ctx, role);
 
     if (role.isSystem) throw new BusinessRuleError("System roles cannot be deleted.");
     if (role._count.userRoles > 0) {

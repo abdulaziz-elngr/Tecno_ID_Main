@@ -30,21 +30,17 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       },
       include: {
         branch: { select: { id: true, name: true } },
-        academicLevel: { select: { id: true, name: true } },
-        primaryGroup: { select: { id: true, name: true } },
-        parents: { include: { parent: true } },
-        groupStudents: {
-          include: {
-            group: {
-              select: {
-                id: true,
-                name: true,
-                subject: { select: { id: true, name: true } },
-                teacher: { select: { fullName: true } }
-              }
-            }
+        stage: { select: { id: true, name: true } },
+        grade: { select: { id: true, name: true } },
+        group: {
+          select: {
+            id: true,
+            name: true,
+            capacity: true,
+            teacher: { select: { fullName: true } }
           }
-        }
+        },
+        parents: { include: { parent: true } }
       }
     });
     if (!student) throw new NotFoundError("Student not found.");
@@ -62,9 +58,11 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
             select: {
               id: true,
               date: true,
-              group: { select: { name: true, subject: { select: { name: true } } } }
+              group: { select: { name: true } }
             }
-          }
+          },
+          originGroupId: true,
+          makeUpReason: true
         }
       }),
       db.examResult.findMany({
@@ -189,7 +187,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ...attendanceRows.slice(0, 30).map((a) => ({
         at: a.recordedAt,
         kind: "ATTENDANCE" as const,
-        label: `${a.type} — ${a.session.group.subject.name} (${a.session.group.name})`
+        label: `${a.type} — ${a.session.group.name}`
       })),
       ...gradedExams.slice(-15).map((r) => ({
         at: r.exam.date,
@@ -207,6 +205,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       student: {
         id: student.id,
         studentCode: student.studentCode,
+        qrCode: student.qrCode,
         fullName: student.fullName,
         photoUrl: student.photoUrl,
         gender: student.gender,
@@ -219,20 +218,14 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         notes: student.notes,
         emergencyContact: student.emergencyContact,
         branch: student.branch,
-        academicLevel: student.academicLevel,
-        primaryGroup: student.primaryGroup
+        stage: student.stage,
+        grade: student.grade,
+        group: student.group
       },
       parents: student.parents.map((p) => ({
         relationship: p.relationship,
         isPrimary: p.isPrimary,
         ...p.parent
-      })),
-      groups: student.groupStudents.map((gs) => ({
-        id: gs.group.id,
-        name: gs.group.name,
-        subject: gs.group.subject,
-        teacher: gs.group.teacher,
-        isPrimary: gs.isPrimary
       })),
       attendance: {
         summary: {

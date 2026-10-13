@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
+import { OverdueNotices } from "@/components/payments/OverdueNotices";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
@@ -8,7 +9,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <Sidebar />
       <div className="flex min-h-screen flex-1 flex-col">
         <Topbar />
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="flex-1 p-4 md:p-6">
+          <div className="mb-4 empty:hidden"><OverdueNotices compact /></div>
+          {children}
+        </main>
       </div>
     </div>
   );

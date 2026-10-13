@@ -38,19 +38,18 @@ const SECTIONS: NavSection[] = [
   {
     key: "nav.group.academic",
     items: [
-      { href: "/dashboard/academic/levels", key: "nav.levels" },
-      { href: "/dashboard/academic/subjects", key: "nav.subjects" },
-      { href: "/dashboard/academic/groups", key: "nav.groups" },
-      { href: "/dashboard/academic/schedule", key: "nav.schedule" },
-      { href: "/dashboard/academic/rooms", key: "nav.rooms" },
-      { href: "/dashboard/academic/sessions", key: "nav.sessions" }
+      { href: "/dashboard/academic/stages", key: "nav.stages" },
+      { href: "/dashboard/academic/grades", key: "nav.gradesNav" },
+      { href: "/dashboard/academic", key: "nav.groups" },
+      { href: "/dashboard/academic/subjects", key: "nav.subjects" }
     ]
   },
   {
     key: "nav.group.attendance",
     items: [
+      { href: "/dashboard/academic/lesson-formation", key: "nav.lessonFormation" },
       { href: "/dashboard/attendance/scan", key: "nav.scanner" },
-      { href: "/dashboard/attendance", key: "nav.attendance" },
+      { href: "/dashboard/academic/sessions", key: "nav.sessions" },
       { href: "/dashboard/attendance/employees", key: "nav.employeeAttendance" }
     ]
   },
@@ -59,7 +58,8 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/dashboard/performance/exams", key: "nav.exams" },
       { href: "/dashboard/performance/recitation", key: "nav.recitation" },
-      { href: "/dashboard/performance/assignments", key: "nav.assignments" }
+      { href: "/dashboard/performance/assignments", key: "nav.assignments" },
+      { href: "/dashboard/performance/students", key: "nav.studentPerformance" }
     ]
   },
   {
@@ -67,16 +67,13 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/dashboard/finance/subscriptions", key: "nav.subscriptions" },
       { href: "/dashboard/finance/payments", key: "nav.payments" },
-      { href: "/dashboard/finance/invoices", key: "nav.invoices" },
-      { href: "/dashboard/finance/expenses", key: "nav.expenses" },
-      { href: "/dashboard/finance/utilities", key: "nav.utilities" }
+      { href: "/dashboard/finance/records", key: "nav.paymentRecords" },
+      { href: "/dashboard/finance/invoices", key: "nav.invoices" }
     ]
   },
   {
     key: "nav.group.communication",
     items: [
-      { href: "/dashboard/communication/whatsapp", key: "nav.whatsapp" },
-      { href: "/dashboard/communication/announcements", key: "nav.announcements" },
       { href: "/dashboard/communication/notifications", key: "nav.notifications" },
       { href: "/dashboard/communication/templates", key: "nav.templates" }
     ]
@@ -93,7 +90,7 @@ const BOTTOM: NavItem[] = [
 ];
 
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/dashboard" || href === "/dashboard/academic" || href === "/dashboard/attendance") {
+  if (href === "/dashboard" || href === "/dashboard/academic") {
     return pathname === href;
   }
   return pathname === href || pathname.startsWith(`${href}/`);

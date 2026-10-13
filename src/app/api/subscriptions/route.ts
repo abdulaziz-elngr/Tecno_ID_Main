@@ -50,18 +50,7 @@ export async function GET(request: NextRequest) {
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         include: {
-          student: {
-            select: {
-              id: true,
-              fullName: true,
-              studentCode: true,
-              parents: {
-                where: { isPrimary: true },
-                take: 1,
-                select: { parent: { select: { fullName: true, phone: true, whatsappNumber: true } } }
-              }
-            }
-          }
+          student: { select: { id: true, fullName: true, studentCode: true } }
         }
       }),
       db.subscription.aggregate({ where, _sum: { amount: true, discount: true, paidAmount: true } })
@@ -73,12 +62,7 @@ export async function GET(request: NextRequest) {
     return ok({
       subscriptions: rows.map((s) => ({
         id: s.id,
-        student: {
-          id: s.student.id,
-          fullName: s.student.fullName,
-          studentCode: s.student.studentCode,
-          primaryParent: s.student.parents[0]?.parent ?? null
-        },
+        student: s.student,
         groupId: s.groupId,
         periodYear: s.periodYear,
         periodMonth: s.periodMonth,
@@ -114,6 +98,21 @@ export async function POST(request: NextRequest) {
     });
     if (!student) throw new BusinessRuleError("Student not found.", { status: 404 });
     resolveBranchScope(ctx, student.branchId);
+
+    // groupId is client-supplied: it must be a group of this organization
+    // in a branch the caller may act on.
+    if (input.groupId) {
+      const group = await db.group.findFirst({
+        where: {
+          id: input.groupId,
+          deletedAt: null,
+          branch: { center: { organizationId: ctx.organizationId } }
+        },
+        select: { branchId: true }
+      });
+      if (!group) throw new BusinessRuleError("Invalid group.", { status: 400 });
+      resolveBranchScope(ctx, group.branchId);
+    }
 
     // Postgres treats NULL group ids as distinct in the unique index,
     // so the general (no-group) duplicate case is checked here.

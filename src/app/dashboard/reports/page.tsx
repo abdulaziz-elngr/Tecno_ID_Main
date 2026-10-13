@@ -8,15 +8,13 @@ import { formatMoneyClient, qs, todayISO, useApi } from "@/lib/client";
 interface FinancialReport {
   summary: {
     revenue: number;
-    expenses: number;
-    netIncome: number;
     billed: number;
     collected: number;
     outstanding: number;
     collectionRate: number;
   };
   byMethod: { method: string; amount: number }[];
-  series: { key: string; revenue: number; expenses: number }[];
+  series: { key: string; revenue: number }[];
 }
 
 interface StudentReportRow {
@@ -117,15 +115,14 @@ export default function ReportsPage() {
             <>
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatCard label="Revenue" value={formatMoneyClient(financial.summary.revenue)} tone="positive" />
-                <StatCard label="Expenses" value={formatMoneyClient(financial.summary.expenses)} tone="negative" />
-                <StatCard label="Net income" value={formatMoneyClient(financial.summary.netIncome)} />
+                <StatCard label="Outstanding" value={formatMoneyClient(financial.summary.outstanding)} tone="negative" />
                 <StatCard label="Collection rate" value={`${financial.summary.collectionRate}%`} />
               </div>
               {financial.series.length > 0 && (
                 <div className="card p-4">
-                  <p className="mb-2 text-sm font-medium">Revenue vs expenses</p>
+                  <p className="mb-2 text-sm font-medium">Revenue</p>
                   <BarChart
-                    data={financial.series.map((s) => ({ label: s.key, primary: s.revenue, secondary: s.expenses }))}
+                    data={financial.series.map((s) => ({ label: s.key, primary: s.revenue }))}
                   />
                 </div>
               )}

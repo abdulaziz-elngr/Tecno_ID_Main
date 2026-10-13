@@ -5,8 +5,7 @@ import {
   remainingAmount,
   computeSubscriptionStatus,
   allocatePayment,
-  collectionRate,
-  netIncome
+  collectionRate
 } from "./billing";
 
 describe("round2", () => {
@@ -119,15 +118,5 @@ describe("collectionRate", () => {
 
   it("computes a rounded percentage", () => {
     expect(collectionRate(750, 1000)).toBe(75);
-  });
-});
-
-describe("netIncome", () => {
-  it("subtracts expenses from revenue", () => {
-    expect(netIncome(1000, 400)).toBe(600);
-  });
-
-  it("can be negative when expenses exceed revenue", () => {
-    expect(netIncome(400, 1000)).toBe(-600);
   });
 });

@@ -4,9 +4,10 @@ import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { handleApiError, ok, readJson, NotFoundError, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
+import { canCancelLesson } from "@/lib/lesson-flow";
 
 const patchSchema = z.object({
-  status: z.enum(["SCHEDULED", "OPEN", "COMPLETED", "CANCELLED"]).optional(),
+  status: z.enum(["CANCELLED"]).optional(),
   notes: z.string().trim().max(500).optional(),
   reason: z.string().trim().min(3).max(500).optional()
 });
@@ -36,28 +37,22 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
             id: true,
             name: true,
             capacity: true,
-            subject: { select: { id: true, name: true } },
+            grade: { select: { id: true, name: true, stage: { select: { id: true, name: true } } } },
             teacher: { select: { id: true, fullName: true } },
             assistant: { select: { id: true, fullName: true } },
-            room: { select: { id: true, name: true } },
-            groupStudents: {
-              include: {
-                student: {
-                  select: {
-                    id: true,
-                    fullName: true,
-                    studentCode: true,
-                    photoUrl: true,
-                    status: true,
-                    parents: {
-                      where: { isPrimary: true },
-                      take: 1,
-                      select: {
-                        relationship: true,
-                        parent: { select: { fullName: true, phone: true, whatsappNumber: true } }
-                      }
-                    }
-                  }
+            subject: { select: { id: true, name: true, code: true } },
+            students: {
+              where: { deletedAt: null },
+              select: {
+                id: true,
+                fullName: true,
+                studentCode: true,
+                photoUrl: true,
+                status: true,
+                parents: {
+                  where: { isPrimary: true },
+                  take: 1,
+                  select: { parent: { select: { fullName: true, phone: true, whatsappNumber: true } } }
                 }
               }
             }
@@ -81,13 +76,13 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
 
     // Roster = enrolled students + any make-up attendees not on the roster.
     const attendanceByStudent = new Map(session.attendances.map((a) => [a.studentId, a]));
-    const roster = session.group.groupStudents.map((gs) => ({
-      student: gs.student,
-      isPrimary: gs.isPrimary,
-      attendance: attendanceByStudent.get(gs.studentId) ?? null
+    const roster = session.group.students.map((student) => ({
+      student,
+      isPrimary: true,
+      attendance: attendanceByStudent.get(student.id) ?? null
     }));
 
-    const rosterIds = new Set(session.group.groupStudents.map((gs) => gs.studentId));
+    const rosterIds = new Set(session.group.students.map((s) => s.id));
     const makeUpStudentIds = session.attendances
       .filter((a) => !rosterIds.has(a.studentId))
       .map((a) => a.studentId);
@@ -103,10 +98,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
             parents: {
               where: { isPrimary: true },
               take: 1,
-              select: {
-                relationship: true,
-                parent: { select: { fullName: true, phone: true, whatsappNumber: true } }
-              }
+              select: { parent: { select: { fullName: true, phone: true, whatsappNumber: true } } }
             }
           }
         })
@@ -120,14 +112,19 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         endMinutes: session.endMinutes,
         status: session.status,
         notes: session.notes,
+        lessonNumber: session.lessonNumber,
+        planId: session.planId,
+        openedAt: session.openedAt,
+        closedAt: session.closedAt,
         group: {
           id: session.group.id,
           name: session.group.name,
           capacity: session.group.capacity,
+          grade: session.group.grade,
+          stage: session.group.grade.stage,
           subject: session.group.subject,
           teacher: session.group.teacher,
-          assistant: session.group.assistant,
-          room: session.group.room
+          assistant: session.group.assistant
         }
       },
       roster,
@@ -141,7 +138,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         makeUp: session.attendances.filter((a) => a.type === "MAKE_UP").length,
         excused: session.attendances.filter((a) => a.type === "EXCUSED").length,
         absent: session.attendances.filter((a) => a.type === "ABSENT").length,
-        enrolled: session.group.groupStudents.length
+        enrolled: session.group.students.length
       }
     });
   } catch (err) {
@@ -149,6 +146,11 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   }
 }
 
+/**
+ * Notes and cancellation only. Opening and closing a lesson have their own
+ * endpoints (POST /api/sessions/:id/open and /close) so the lesson order and
+ * "only an explicit close completes a lesson" rules can't be bypassed here.
+ */
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const ctx = await requirePermission("sessions.update");
@@ -157,33 +159,34 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
 
     const input = await readJson(request, patchSchema);
 
-    // Cancelling a session that already has attendance needs a reason —
-    // it changes the meaning of historical records.
     if (input.status === "CANCELLED") {
+      if (!canCancelLesson(existing.status)) {
+        throw new BusinessRuleError(
+          existing.status === "COMPLETED"
+            ? "A closed lesson is final and cannot be cancelled."
+            : "This lesson is already cancelled.",
+          { code: "CANNOT_CANCEL" }
+        );
+      }
+      // Cancelling changes the meaning of history (and, for a numbered lesson,
+      // lets the plan move on), so a reason is always required.
       const recorded = await db.attendance.count({
         where: { sessionId: existing.id, deletedAt: null }
       });
-      if (recorded > 0 && !input.reason) {
-        throw new BusinessRuleError(
-          "This session already has attendance records. A reason is required to cancel it."
-        );
+      if ((recorded > 0 || existing.lessonNumber !== null) && !input.reason) {
+        throw new BusinessRuleError("A reason is required to cancel this lesson.", { code: "REASON_REQUIRED" });
       }
     }
 
     const updated = await db.classSession.update({
       where: { id: existing.id },
-      data: {
-        status: input.status,
-        notes: input.notes,
-        openedAt: input.status === "OPEN" && !existing.openedAt ? new Date() : existing.openedAt,
-        closedAt: input.status === "COMPLETED" ? new Date() : existing.closedAt
-      }
+      data: { status: input.status, notes: input.notes }
     });
 
     await writeAuditLog({
       organizationId: ctx.organizationId,
       actorUserId: ctx.userId,
-      action: "UPDATE_SESSION",
+      action: input.status === "CANCELLED" ? "CANCEL_LESSON" : "UPDATE_SESSION",
       entityType: "ClassSession",
       entityId: updated.id,
       beforeValue: existing,

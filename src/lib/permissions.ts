@@ -9,11 +9,12 @@
 export const PERMISSIONS = {
   students: ["students.view", "students.create", "students.update", "students.delete"],
   parents: ["parents.view", "parents.create", "parents.update"],
-  teachers: ["teachers.view", "teachers.create", "teachers.update"],
+  teachers: ["teachers.view", "teachers.create", "teachers.update", "teachers.delete"],
   employees: [
     "employees.view",
     "employees.create",
     "employees.update",
+    "employees.delete",
     "employees.attendance.view",
     "employees.attendance.manage"
   ],
@@ -31,12 +32,12 @@ export const PERMISSIONS = {
     "payments.update",
     "payments.refund",
     "payments.void",
+    "payments.reprint",
     "subscriptions.view",
     "subscriptions.manage",
     "invoices.view",
     "invoices.void"
   ],
-  expenses: ["expenses.view", "expenses.create", "expenses.update", "utilities.view", "utilities.manage"],
   exams: [
     "exams.view",
     "exams.create",
@@ -49,6 +50,7 @@ export const PERMISSIONS = {
     "assignments.view",
     "assignments.manage"
   ],
+  performance: ["performance.view", "performance.recognize"],
   communication: [
     "notifications.view",
     "notifications.send",
@@ -61,11 +63,12 @@ export const PERMISSIONS = {
   settings: ["settings.manage"],
   audit: ["audit_logs.view"],
   academic: [
-    "academic.levels.manage",
+    "academic.stages.manage",
+    "academic.grades.manage",
     "academic.subjects.manage",
     "academic.groups.manage",
-    "academic.rooms.manage",
-    "academic.schedule.manage"
+    "academic.schedule.manage",
+    "academic.fees.manage"
   ]
 } as const;
 
@@ -89,8 +92,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     ...PERMISSIONS.sessions,
     ...PERMISSIONS.attendance,
     ...PERMISSIONS.payments,
-    ...PERMISSIONS.expenses,
     ...PERMISSIONS.exams,
+    ...PERMISSIONS.performance,
     ...PERMISSIONS.communication,
     ...PERMISSIONS.reports,
     ...PERMISSIONS.academic,
@@ -98,7 +101,6 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
   ACCOUNTANT: [
     ...PERMISSIONS.payments,
-    ...PERMISSIONS.expenses,
     "students.view",
     "reports.view",
     "reports.financial.view",
@@ -120,6 +122,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "recitation.manage",
     "assignments.view",
     "assignments.manage",
+    "performance.view",
+    "performance.recognize",
     "reports.view"
   ],
   TEACHER_ASSISTANT: [
@@ -142,6 +146,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "attendance.create",
     "payments.view",
     "payments.create",
+    "payments.reprint",
     "subscriptions.view",
     "invoices.view",
     "notifications.view"

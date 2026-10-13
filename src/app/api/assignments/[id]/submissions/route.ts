@@ -80,6 +80,29 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
     const input = await readJson(request, bodySchema);
     const maxScore = Number(assignment.maxScore);
 
+    // studentId comes from the client: only students of THIS organization
+    // who are in the assignment's group (or who already have a submission
+    // for it, e.g. after moving groups) may be written to.
+    const [groupStudents, existingSubs] = await Promise.all([
+      db.student.findMany({
+        where: { organizationId: ctx.organizationId, groupId: assignment.groupId, deletedAt: null },
+        select: { id: true }
+      }),
+      db.assignmentSubmission.findMany({
+        where: { assignmentId: assignment.id, student: { organizationId: ctx.organizationId } },
+        select: { studentId: true }
+      })
+    ]);
+    const allowedStudentIds = new Set([
+      ...groupStudents.map((st) => st.id),
+      ...existingSubs.map((sub) => sub.studentId)
+    ]);
+    if (input.submissions.some((row) => !allowedStudentIds.has(row.studentId))) {
+      throw new BusinessRuleError("One or more students do not belong to this assignment's group.", {
+        status: 400
+      });
+    }
+
     try {
       for (const row of input.submissions) {
         if (row.grade !== null && row.grade !== undefined) validateScore(row.grade, maxScore);

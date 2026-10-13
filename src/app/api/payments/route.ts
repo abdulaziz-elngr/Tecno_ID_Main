@@ -71,18 +71,7 @@ export async function GET(request: NextRequest) {
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         include: {
-          student: {
-            select: {
-              id: true,
-              fullName: true,
-              studentCode: true,
-              parents: {
-                where: { isPrimary: true },
-                take: 1,
-                select: { parent: { select: { fullName: true, phone: true, whatsappNumber: true } } }
-              }
-            }
-          },
+          student: { select: { id: true, fullName: true, studentCode: true } },
           invoice: { select: { id: true, invoiceNumber: true, status: true } }
         }
       }),
@@ -96,12 +85,7 @@ export async function GET(request: NextRequest) {
       payments: rows.map((p) => ({
         id: p.id,
         receiptNumber: p.receiptNumber,
-        student: {
-          id: p.student.id,
-          fullName: p.student.fullName,
-          studentCode: p.student.studentCode,
-          primaryParent: p.student.parents[0]?.parent ?? null
-        },
+        student: p.student,
         amount: Number(p.amount),
         refundedAmount: Number(p.refundedAmount),
         method: p.method,
@@ -154,6 +138,26 @@ export async function POST(request: NextRequest) {
       },
       orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }]
     });
+
+    // Oldest-month-first: an explicit selection must be a prefix of everything
+    // still owing (no skipping an earlier unpaid month).
+    if (input.subscriptionIds) {
+      const allOwing = await db.subscription.findMany({
+        where: {
+          studentId: student.id,
+          organizationId: ctx.organizationId,
+          status: { in: ["UNPAID", "PARTIAL", "OVERDUE"] }
+        },
+        orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }],
+        select: { id: true }
+      });
+      const chosen = new Set(input.subscriptionIds);
+      const prefixLength = allOwing.findIndex((r) => !chosen.has(r.id));
+      const firstSkipped = prefixLength === -1 ? allOwing.length : prefixLength;
+      if (allOwing.slice(firstSkipped).some((r) => chosen.has(r.id))) {
+        throw new BusinessRuleError("A previous month is still unpaid.", { status: 409, code: "OUT_OF_ORDER" });
+      }
+    }
 
     const targets = outstanding.map((s) => ({
       subscriptionId: s.id,
@@ -241,7 +245,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    void dispatchEvent({
+    await dispatchEvent({
       organizationId: ctx.organizationId,
       event: "PAYMENT_RECEIVED",
       studentId: student.id,

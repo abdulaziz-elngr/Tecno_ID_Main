@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import { useApi, formatDateTime, formatMoneyClient } from "@/lib/client";
+import { OverdueNotices } from "@/components/payments/OverdueNotices";
 import { BarChart, Badge, ErrorNotice, PageHeader, StatCard } from "@/components/ui";
 
 /**
@@ -28,14 +29,23 @@ interface Stats {
   };
   finance?: {
     monthlyRevenue: number;
-    monthlyExpenses: number;
-    netIncome: number;
+    paidStudents: number;
+    unpaidStudents: number;
     outstanding: number;
-    collectionRate: number;
-    unpaidSubscriptions: number;
-    unpaidUtilityBills: number;
+    overdueMonths: number;
+    todayPaymentsCount: number;
+    todayPaymentsAmount: number;
   };
-  financeTrend?: { month: string; revenue: number; expenses: number }[];
+  groupCapacity?: {
+    id: string;
+    name: string;
+    gradeName: string;
+    stageName: string;
+    current: number;
+    capacity: number;
+    isFull: boolean;
+  }[];
+  financeTrend?: { month: string; revenue: number }[];
   upcomingExams?: {
     id: string;
     name: string;
@@ -58,11 +68,8 @@ export default function DashboardPage() {
 
   const alerts: string[] = [];
   if (data?.finance) {
-    if (data.finance.unpaidSubscriptions > 0) {
-      alerts.push(`${data.finance.unpaidSubscriptions} unpaid / overdue subscriptions`);
-    }
-    if (data.finance.unpaidUtilityBills > 0) {
-      alerts.push(`${data.finance.unpaidUtilityBills} unpaid utility bills`);
+    if (data.finance.overdueMonths > 0) {
+      alerts.push(`${data.finance.overdueMonths} overdue subscription months`);
     }
   }
   if (data?.attendanceToday && data.attendanceToday.absent > 0) {
@@ -82,6 +89,8 @@ export default function DashboardPage() {
           </Link>
         }
       />
+
+      <OverdueNotices />
 
       <ErrorNotice message={error} />
 
@@ -122,21 +131,53 @@ export default function DashboardPage() {
               value={formatMoneyClient(data.finance.monthlyRevenue)}
               tone="positive"
             />
-            <StatCard
-              label={t("dashboard.monthlyExpenses")}
-              value={formatMoneyClient(data.finance.monthlyExpenses)}
-            />
-            <StatCard
-              label={t("dashboard.netIncome")}
-              value={formatMoneyClient(data.finance.netIncome)}
-              tone={data.finance.netIncome >= 0 ? "positive" : "negative"}
-            />
+            <StatCard label={t("pay.paidStudents")} value={data.finance.paidStudents} tone="positive" />
+            <StatCard label={t("pay.unpaidStudents")} value={data.finance.unpaidStudents} tone="warning" />
             <StatCard
               label={t("dashboard.outstanding")}
               value={formatMoneyClient(data.finance.outstanding)}
-              hint={`${t("dashboard.collectionRate")}: ${data.finance.collectionRate}%`}
-              tone="warning"
+              hint={`${t("pay.overdueMonths")}: ${data.finance.overdueMonths}`}
+              tone="negative"
             />
+            <StatCard
+              label="Today's Payments"
+              value={data.finance.todayPaymentsCount}
+              hint={formatMoneyClient(data.finance.todayPaymentsAmount)}
+              tone="positive"
+            />
+          </div>
+        </section>
+      )}
+
+      {data?.groupCapacity && data.groupCapacity.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-black/50 dark:text-white/50">
+            Group Capacity
+          </h2>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {data.groupCapacity.map((g) => {
+              const percent = g.capacity > 0 ? Math.min(100, Math.round((g.current / g.capacity) * 100)) : 0;
+              return (
+                <div key={g.id} className="card p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold">{g.name}</span>
+                    {g.isFull && <Badge tone="danger">FULL</Badge>}
+                  </div>
+                  <p className="text-xs text-black/50 dark:text-white/50">
+                    {g.stageName} · {g.gradeName}
+                  </p>
+                  <p className="mt-1 text-sm">
+                    {g.current} / {g.capacity}
+                  </p>
+                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                    <div
+                      className={`h-full rounded-full ${g.isFull ? "bg-red-500" : "bg-tecno-gold"}`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -148,13 +189,9 @@ export default function DashboardPage() {
             <BarChart
               data={data.financeTrend.map((row) => ({
                 label: row.month.slice(5),
-                primary: row.revenue,
-                secondary: row.expenses
+                primary: row.revenue
               }))}
             />
-            <p className="mt-2 text-xs text-black/50 dark:text-white/50">
-              Gold = revenue, grey = expenses.
-            </p>
           </div>
         )}
 

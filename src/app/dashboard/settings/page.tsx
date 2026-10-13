@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { apiPatch, useApi } from "@/lib/client";
+import { apiPatch, apiPost, useApi } from "@/lib/client";
 import { Badge, ErrorNotice, Field, PageHeader, useToast } from "@/components/ui";
 
 interface SettingsData {
@@ -16,12 +17,9 @@ interface SettingsData {
     logoUrl: string | null;
   };
   attendanceRules: {
-    requireSameSubject: boolean;
-    requireSameAcademicLevel: boolean;
-    enforceCapacity: boolean;
-    maxMakeUpPerMonth: number;
-    makeUpWindowDays: number;
-    requireApproval: boolean;
+    respectCapacity: boolean;
+    maxMakeUpsPerMonth: number;
+    maxDaysAfterOrigin: number;
   };
   lateThresholdMinutes: number;
   paymentRules: {
@@ -37,7 +35,6 @@ interface SettingsData {
     missingAssignmentsCount: number;
     repeatedAbsenceCount: number;
   };
-  integrations: { whatsapp: { configured: boolean } };
 }
 
 export default function SettingsPage() {
@@ -147,65 +144,36 @@ export default function SettingsPage() {
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={form.attendanceRules.requireSameSubject}
-              onChange={(e) => setForm({ ...form, attendanceRules: { ...form.attendanceRules, requireSameSubject: e.target.checked } })}
+              checked={form.attendanceRules.respectCapacity}
+              onChange={(e) => setForm({ ...form, attendanceRules: { ...form.attendanceRules, respectCapacity: e.target.checked } })}
               className="h-4 w-4"
             />
-            Require same subject for make-up
+            Enforce group capacity (spec §3, §9)
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.attendanceRules.requireSameAcademicLevel}
-              onChange={(e) =>
-                setForm({ ...form, attendanceRules: { ...form.attendanceRules, requireSameAcademicLevel: e.target.checked } })
-              }
-              className="h-4 w-4"
-            />
-            Require same academic level
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.attendanceRules.enforceCapacity}
-              onChange={(e) => setForm({ ...form, attendanceRules: { ...form.attendanceRules, enforceCapacity: e.target.checked } })}
-              className="h-4 w-4"
-            />
-            Enforce room capacity
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.attendanceRules.requireApproval}
-              onChange={(e) => setForm({ ...form, attendanceRules: { ...form.attendanceRules, requireApproval: e.target.checked } })}
-              className="h-4 w-4"
-            />
-            Make-ups require approval
-          </label>
-          <Field label="Max make-ups / month">
+          <Field label="Max make-ups / month" hint="0 = unlimited">
             {(id) => (
               <input
                 id={id}
                 type="number"
                 min={0}
                 className="input"
-                value={form.attendanceRules.maxMakeUpPerMonth}
+                value={form.attendanceRules.maxMakeUpsPerMonth}
                 onChange={(e) =>
-                  setForm({ ...form, attendanceRules: { ...form.attendanceRules, maxMakeUpPerMonth: Number(e.target.value) } })
+                  setForm({ ...form, attendanceRules: { ...form.attendanceRules, maxMakeUpsPerMonth: Number(e.target.value) } })
                 }
               />
             )}
           </Field>
-          <Field label="Make-up window (days)">
+          <Field label="Make-up window (days)" hint="0 = no limit">
             {(id) => (
               <input
                 id={id}
                 type="number"
                 min={0}
                 className="input"
-                value={form.attendanceRules.makeUpWindowDays}
+                value={form.attendanceRules.maxDaysAfterOrigin}
                 onChange={(e) =>
-                  setForm({ ...form, attendanceRules: { ...form.attendanceRules, makeUpWindowDays: Number(e.target.value) } })
+                  setForm({ ...form, attendanceRules: { ...form.attendanceRules, maxDaysAfterOrigin: Number(e.target.value) } })
                 }
               />
             )}
@@ -238,21 +206,19 @@ export default function SettingsPage() {
         </button>
       </section>
 
+      <section className="card space-y-2 p-4">
+        <h2 className="font-semibold">{t("settings.fees")}</h2>
+        <p className="text-sm text-black/60 dark:text-white/60">
+          {t("sub.pricesTitle")}: {t("sub.stage")} → {t("sub.grade")} → {t("sub.price")}
+        </p>
+        <Link href="/dashboard/finance/subscriptions" className="btn-secondary inline-block">
+          {t("sub.title")}
+        </Link>
+      </section>
+
       <section className="card space-y-3 p-4">
         <h2 className="font-semibold">{t("settings.paymentRules")}</h2>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Default monthly amount">
-            {(id) => (
-              <input
-                id={id}
-                type="number"
-                min={0}
-                className="input"
-                value={form.paymentRules.defaultMonthlyAmount}
-                onChange={(e) => setForm({ ...form, paymentRules: { ...form.paymentRules, defaultMonthlyAmount: Number(e.target.value) } })}
-              />
-            )}
-          </Field>
           <Field label="Due day of month">
             {(id) => (
               <input
@@ -397,18 +363,6 @@ export default function SettingsPage() {
         </button>
       </section>
 
-      <section id="whatsapp" className="card space-y-2 p-4">
-        <h2 className="font-semibold">{t("settings.integrations")}</h2>
-        <div className="flex items-center gap-2 text-sm">
-          <span>WhatsApp</span>
-          <Badge tone={form.integrations.whatsapp.configured ? "success" : "neutral"}>
-            {form.integrations.whatsapp.configured ? "Configured" : "Not configured"}
-          </Badge>
-        </div>
-        <p className="text-xs text-black/50 dark:text-white/50">
-          Configure by setting WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN in the server environment.
-        </p>
-      </section>
     </div>
   );
 }

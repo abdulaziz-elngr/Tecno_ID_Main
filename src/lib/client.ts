@@ -20,12 +20,15 @@ export interface Pagination {
 export class ApiError extends Error {
   status: number;
   details?: unknown;
+  /** Machine-readable code of a business-rule failure (e.g. "PLAN_EXISTS"), when the API sent one. */
+  code?: string;
 
-  constructor(message: string, status: number, details?: unknown) {
+  constructor(message: string, status: number, details?: unknown, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.details = details;
+    this.code = code;
   }
 }
 
@@ -35,7 +38,8 @@ async function parse(response: Response) {
     throw new ApiError(
       typeof body.error === "string" ? body.error : "Something went wrong. Please try again.",
       response.status,
-      body.details
+      body.details,
+      typeof body.code === "string" ? body.code : undefined
     );
   }
   return body;

@@ -10,19 +10,14 @@ import {
 
 function baseFacts(overrides: Partial<AttendanceFacts> = {}): AttendanceFacts {
   return {
-    enrolledGroupIds: ["group-1"],
-    primaryGroupIdForSubject: "group-1",
+    studentGroupId: "group-1",
     sessionGroupId: "group-1",
-    sessionSubjectId: "subject-1",
-    sessionAcademicLevelId: "level-1",
-    primarySubjectId: "subject-1",
-    studentAcademicLevelId: "level-1",
     groupCapacity: 20,
     currentAttendeeCount: 5,
     alreadyRecorded: false,
     makeUpsThisMonth: 0,
     daysSinceOriginSession: null,
-    hasApproval: false,
+    confirmMakeUp: false,
     minutesAfterStart: 0,
     sessionStatus: "OPEN",
     studentStatus: "ACTIVE",
@@ -56,7 +51,7 @@ describe("evaluateAttendance — hard blockers", () => {
   });
 });
 
-describe("evaluateAttendance — enrolled (regular) path", () => {
+describe("evaluateAttendance — own group (regular) path", () => {
   it("records REGULAR attendance within the late threshold", () => {
     const result = evaluateAttendance(baseFacts({ minutesAfterStart: 5 }));
     expect(result).toMatchObject({ allowed: true, type: "REGULAR", code: "OK_REGULAR", isMakeUp: false });
@@ -83,79 +78,79 @@ describe("evaluateAttendance — enrolled (regular) path", () => {
     expect(result.code).toBe("CAPACITY_FULL");
   });
 
-  it("allows over capacity when respectCapacity is disabled", () => {
+  it("allows over capacity when explicitly overridden", () => {
+    const result = evaluateAttendance(
+      baseFacts({ currentAttendeeCount: 25, groupCapacity: 20, overrideCapacity: true })
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it("allows over capacity when respectCapacity is disabled in rules", () => {
     const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, respectCapacity: false };
     const result = evaluateAttendance(baseFacts({ currentAttendeeCount: 25, groupCapacity: 20 }), rules);
     expect(result.allowed).toBe(true);
   });
 });
 
-describe("evaluateAttendance — make-up path (Rule 2, Rule 3)", () => {
-  function makeUpFacts(overrides: Partial<AttendanceFacts> = {}): AttendanceFacts {
+describe("evaluateAttendance — cross-group make-up path (spec §10)", () => {
+  function crossGroupFacts(overrides: Partial<AttendanceFacts> = {}): AttendanceFacts {
     return baseFacts({
-      enrolledGroupIds: ["other-group"],
-      sessionGroupId: "makeup-group",
-      makeUpsThisMonth: 1,
-      daysSinceOriginSession: 3,
+      studentGroupId: "home-group",
+      sessionGroupId: "other-group",
       ...overrides
     });
   }
 
-  it("allows a valid make-up in the same subject and level", () => {
-    const result = evaluateAttendance(makeUpFacts());
+  it("never auto-approves — returns DIFFERENT_GROUP + needsConfirmation when not yet confirmed", () => {
+    const result = evaluateAttendance(crossGroupFacts());
+    expect(result.allowed).toBe(false);
+    expect(result.needsConfirmation).toBe(true);
+    expect(result.code).toBe("DIFFERENT_GROUP");
+  });
+
+  it("records MAKE_UP once confirmMakeUp is true", () => {
+    const result = evaluateAttendance(crossGroupFacts({ confirmMakeUp: true }));
     expect(result).toMatchObject({ allowed: true, type: "MAKE_UP", code: "OK_MAKE_UP", isMakeUp: true });
+    expect(result.needsConfirmation).toBe(false);
   });
 
-  it("denies when the subject does not match and requireSameSubject is set", () => {
-    const result = evaluateAttendance(makeUpFacts({ sessionSubjectId: "other-subject" }));
+  it("still enforces capacity even when confirmed", () => {
+    const result = evaluateAttendance(
+      crossGroupFacts({ confirmMakeUp: true, currentAttendeeCount: 20, groupCapacity: 20 })
+    );
     expect(result.allowed).toBe(false);
-    expect(result.code).toBe("NOT_ENROLLED_SUBJECT_MISMATCH");
-  });
-
-  it("denies when there is no primary group and requireSameSubject is disabled", () => {
-    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, requireSameSubject: false };
-    const result = evaluateAttendance(makeUpFacts({ primaryGroupIdForSubject: null }), rules);
-    expect(result.allowed).toBe(false);
-    expect(result.code).toBe("NOT_ENROLLED_SUBJECT_MISMATCH");
-  });
-
-  it("denies when the academic level does not match", () => {
-    const result = evaluateAttendance(makeUpFacts({ sessionAcademicLevelId: "other-level" }));
-    expect(result.allowed).toBe(false);
-    expect(result.code).toBe("LEVEL_MISMATCH");
+    expect(result.code).toBe("CAPACITY_FULL");
   });
 
   it("denies once the monthly make-up limit is reached", () => {
-    const result = evaluateAttendance(makeUpFacts({ makeUpsThisMonth: 4 }));
+    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, maxMakeUpsPerMonth: 4 };
+    const result = evaluateAttendance(crossGroupFacts({ confirmMakeUp: true, makeUpsThisMonth: 4 }), rules);
     expect(result.allowed).toBe(false);
     expect(result.code).toBe("MAKEUP_LIMIT_REACHED");
   });
 
-  it("allows unlimited make-ups when maxMakeUpsPerMonth is 0", () => {
-    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, maxMakeUpsPerMonth: 0 };
-    const result = evaluateAttendance(makeUpFacts({ makeUpsThisMonth: 50 }), rules);
+  it("allows unlimited make-ups when maxMakeUpsPerMonth is 0 (default)", () => {
+    const result = evaluateAttendance(crossGroupFacts({ confirmMakeUp: true, makeUpsThisMonth: 50 }));
     expect(result.allowed).toBe(true);
   });
 
   it("denies once the make-up window has expired", () => {
-    const result = evaluateAttendance(makeUpFacts({ daysSinceOriginSession: 20 }));
+    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, maxDaysAfterOrigin: 14 };
+    const result = evaluateAttendance(
+      crossGroupFacts({ confirmMakeUp: true, daysSinceOriginSession: 20 }),
+      rules
+    );
     expect(result.allowed).toBe(false);
     expect(result.code).toBe("MAKEUP_WINDOW_EXPIRED");
   });
 
   it("does not enforce the window when no origin session is known", () => {
-    const result = evaluateAttendance(makeUpFacts({ daysSinceOriginSession: null }));
+    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, maxDaysAfterOrigin: 14 };
+    const result = evaluateAttendance(
+      crossGroupFacts({ confirmMakeUp: true, daysSinceOriginSession: null }),
+      rules
+    );
     expect(result.allowed).toBe(true);
-  });
-
-  it("requires approval when the rule demands it", () => {
-    const rules: MakeUpRules = { ...DEFAULT_MAKEUP_RULES, requireApproval: true };
-    const denied = evaluateAttendance(makeUpFacts({ hasApproval: false }), rules);
-    expect(denied.allowed).toBe(false);
-    expect(denied.code).toBe("APPROVAL_REQUIRED");
-
-    const approved = evaluateAttendance(makeUpFacts({ hasApproval: true }), rules);
-    expect(approved.allowed).toBe(true);
   });
 });
 
@@ -170,6 +165,37 @@ describe("attendanceRate", () => {
 
   it("returns 100 when every session was present", () => {
     expect(attendanceRate(10, 10)).toBe(100);
+  });
+});
+
+describe("evaluateAttendance — explicit lesson opening (Stage 2)", () => {
+  it("refuses a scan for a numbered lesson that has not been opened", () => {
+    const result = evaluateAttendance(baseFacts({ sessionStatus: "SCHEDULED", requiresExplicitOpen: true }));
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("LESSON_NOT_OPEN");
+  });
+
+  it("accepts the same scan once the lesson is OPEN", () => {
+    const result = evaluateAttendance(baseFacts({ sessionStatus: "OPEN", requiresExplicitOpen: true }));
+    expect(result.allowed).toBe(true);
+    expect(result.code).toBe("OK_REGULAR");
+  });
+
+  it("legacy sessions (no explicit open required) can still be scanned while SCHEDULED", () => {
+    const result = evaluateAttendance(baseFacts({ sessionStatus: "SCHEDULED" }));
+    expect(result.allowed).toBe(true);
+  });
+
+  it("a lesson stays scannable past its scheduled end — only lateness, never the clock, matters", () => {
+    // 3 hours after the scheduled start the lesson is still OPEN: the student is LATE, not refused.
+    const result = evaluateAttendance(baseFacts({ sessionStatus: "OPEN", requiresExplicitOpen: true, minutesAfterStart: 180 }));
+    expect(result.allowed).toBe(true);
+    expect(result.type).toBe("LATE");
+  });
+
+  it("a closed lesson refuses further scans (attendance is final)", () => {
+    const result = evaluateAttendance(baseFacts({ sessionStatus: "COMPLETED", requiresExplicitOpen: true }));
+    expect(result.code).toBe("SESSION_COMPLETED");
   });
 });
 

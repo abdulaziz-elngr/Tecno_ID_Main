@@ -1,6 +1,5 @@
 import { db } from "./db";
 import { renderTemplate, type TemplateVariables } from "./templates";
-import { enqueueWhatsAppMessage } from "./whatsapp/queue";
 
 /**
  * Notification dispatch (spec §22, §56).
@@ -9,8 +8,9 @@ import { enqueueWhatsAppMessage } from "./whatsapp/queue";
  * payments and exams. It looks up the organization's NotificationRule
  * rows for the event, renders the matching template in the recipient's
  * preferred language, then writes an in-app Notification and/or queues
- * a WhatsApp message. Nothing here talks to the provider directly —
- * WhatsApp always goes through the durable outbox.
+ * nothing else. WhatsApp is NOT sent automatically: staff open wa.me
+ * chat links manually (see src/lib/wa-link.ts), so WHATSAPP-channel
+ * rules are skipped here.
  */
 
 export type NotificationEventValue =
@@ -34,7 +34,6 @@ export interface DispatchParams {
 
 export interface DispatchResult {
   inAppCreated: number;
-  whatsappQueued: number;
   skippedReason?: string;
 }
 
@@ -48,13 +47,27 @@ const EVENT_TYPE: Record<NotificationEventValue, "ATTENDANCE" | "PAYMENT" | "EXA
   ANNOUNCEMENT: "ADMINISTRATIVE"
 };
 
+/**
+ * Never throws: a notification failure must not fail the business action
+ * (payment, attendance, exam publish) that triggered it. Callers await it
+ * because serverless functions may be frozen right after the response.
+ */
 export async function dispatchEvent(params: DispatchParams): Promise<DispatchResult> {
+  try {
+    return await dispatchEventUnsafe(params);
+  } catch (err) {
+    console.error("[notifications] dispatch failed", params.event, err instanceof Error ? err.message : "unknown");
+    return { inAppCreated: 0, skippedReason: "Dispatch failed." };
+  }
+}
+
+async function dispatchEventUnsafe(params: DispatchParams): Promise<DispatchResult> {
   const rules = await db.notificationRule.findMany({
     where: { organizationId: params.organizationId, event: params.event, isEnabled: true }
   });
 
   if (rules.length === 0) {
-    return { inAppCreated: 0, whatsappQueued: 0, skippedReason: "No enabled rule for this event." };
+    return { inAppCreated: 0, skippedReason: "No enabled rule for this event." };
   }
 
   // Resolve recipients: the student's parents (with notifications enabled).
@@ -66,9 +79,10 @@ export async function dispatchEvent(params: DispatchParams): Promise<DispatchRes
     : [];
 
   let inAppCreated = 0;
-  let whatsappQueued = 0;
 
   for (const rule of rules) {
+    // No automatic WhatsApp sending — wa.me links are opened by staff.
+    if (rule.channel === "WHATSAPP") continue;
     for (const link of links) {
       const parent = link.parent;
       if (!parent.notificationsEnabled) continue;
@@ -103,39 +117,6 @@ export async function dispatchEvent(params: DispatchParams): Promise<DispatchRes
 
       const body = renderTemplate(chosen.body, params.variables);
 
-      if (rule.channel === "WHATSAPP") {
-        const number = parent.whatsappNumber || parent.phone;
-        if (!number) continue;
-        try {
-          await enqueueWhatsAppMessage({
-            organizationId: params.organizationId,
-            toNumber: number,
-            body,
-            locale,
-            templateKey: rule.templateKey,
-            studentId: params.studentId,
-            parentId: parent.id,
-            createdById: params.actorUserId
-          });
-          whatsappQueued += 1;
-        } catch {
-          // Invalid number — record it in-app so staff can fix the contact.
-          await db.notification.create({
-            data: {
-              organizationId: params.organizationId,
-              studentId: params.studentId,
-              parentId: parent.id,
-              type: "SYSTEM",
-              channel: "IN_APP",
-              title: "WhatsApp number invalid",
-              body: `Could not queue a WhatsApp message for ${parent.fullName}: the stored number is not valid.`
-            }
-          });
-          inAppCreated += 1;
-        }
-        continue;
-      }
-
       await db.notification.create({
         data: {
           organizationId: params.organizationId,
@@ -152,7 +133,7 @@ export async function dispatchEvent(params: DispatchParams): Promise<DispatchRes
     }
   }
 
-  return { inAppCreated, whatsappQueued };
+  return { inAppCreated };
 }
 
 /** Staff-facing in-app notification (dashboard alerts, system messages). */

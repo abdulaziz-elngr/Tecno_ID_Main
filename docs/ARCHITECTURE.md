@@ -35,7 +35,7 @@ Organization
   └─ Center
       └─ Branch
           ├─ Room
-          └─ Group ── Subject, AcademicLevel
+          └─ Group ── Subject (optional), Grade ── Stage
                 └─ GroupStudent ── Student
 ```
 
@@ -145,6 +145,12 @@ logging, soft deletes for financial/history data).
   than a generic error, so the UI can show *why* a slot was rejected.
 - `POST /api/groups` enforces Rule 9 (room capacity) at creation time:
   a group's `capacity` cannot exceed its assigned room's `capacity`.
+
+- **Stage 1 change:** the standalone *Weekly Schedule* page was removed (it was a
+  redundant global list). A group's days/times are added and removed on the Group
+  detail page, using the same `/api/schedules` endpoints and `Schedule` table, which
+  session generation still depends on. Lesson formation will replace the page in a
+  later stage.
 
 ## 7. Why some things aren't "live" yet
 

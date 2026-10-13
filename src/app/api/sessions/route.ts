@@ -13,7 +13,11 @@ const listSchema = paginationSchema.extend({
   teacherId: z.string().uuid().optional(),
   status: z.enum(["SCHEDULED", "OPEN", "COMPLETED", "CANCELLED"]).optional(),
   from: z.string().date().optional(),
-  to: z.string().date().optional()
+  to: z.string().date().optional(),
+  // Lessons page: a whole calendar month, and/or one monthly plan.
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z.coerce.number().int().min(1).max(12).optional(),
+  planId: z.string().uuid().optional()
 });
 
 const createSchema = z.object({
@@ -36,11 +40,20 @@ export async function GET(request: NextRequest) {
       ...(query.groupId ? { groupId: query.groupId } : {}),
       ...(query.teacherId ? { teacherId: query.teacherId } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.planId ? { planId: query.planId } : {}),
       ...(query.from || query.to
         ? {
             date: {
               ...(query.from ? { gte: toDateOnly(query.from) } : {}),
               ...(query.to ? { lte: toDateOnly(query.to) } : {})
+            }
+          }
+        : {}),
+      ...(query.year && query.month
+        ? {
+            date: {
+              gte: new Date(Date.UTC(query.year, query.month - 1, 1)),
+              lt: new Date(Date.UTC(query.year, query.month, 1))
             }
           }
         : {})
@@ -50,7 +63,10 @@ export async function GET(request: NextRequest) {
       db.classSession.count({ where }),
       db.classSession.findMany({
         where,
-        orderBy: [{ date: "desc" }, { startMinutes: "asc" }],
+        orderBy:
+          query.year && query.month
+            ? [{ date: "asc" }, { startMinutes: "asc" }]
+            : [{ date: "desc" }, { startMinutes: "asc" }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
         select: {
@@ -59,14 +75,16 @@ export async function GET(request: NextRequest) {
           startMinutes: true,
           endMinutes: true,
           status: true,
+          lessonNumber: true,
+          planId: true,
           group: {
             select: {
               id: true,
               name: true,
               capacity: true,
+              grade: { select: { id: true, name: true, stage: { select: { id: true, name: true } } } },
               subject: { select: { id: true, name: true } },
-              teacher: { select: { id: true, fullName: true } },
-              room: { select: { id: true, name: true } }
+              teacher: { select: { id: true, fullName: true } }
             }
           },
           _count: { select: { attendances: true } }
@@ -105,15 +123,15 @@ export async function POST(request: NextRequest) {
         deletedAt: null,
         branch: { deletedAt: null, center: { organizationId: ctx.organizationId } }
       },
-      select: { id: true, branchId: true, roomId: true, teacherId: true, assistantId: true }
+      select: { id: true, branchId: true, teacherId: true, assistantId: true }
     });
     if (!group) throw new BusinessRuleError("Invalid group.", { status: 400 });
     resolveBranchScope(ctx, group.branchId);
 
     const date = toDateOnly(input.date);
 
-    // Rule 10 — ad-hoc sessions must respect the same room/teacher
-    // conflict rules as the weekly timetable.
+    // Ad-hoc sessions must respect the same group/teacher conflict
+    // rules as the weekly timetable (spec §4 — no rooms involved).
     const sameDay = await db.classSession.findMany({
       where: {
         organizationId: ctx.organizationId,
@@ -121,11 +139,10 @@ export async function POST(request: NextRequest) {
         status: { not: "CANCELLED" },
         OR: [
           { groupId: group.id },
-          ...(group.roomId ? [{ roomId: group.roomId }] : []),
           ...(group.teacherId ? [{ teacherId: group.teacherId }] : [])
         ]
       },
-      select: { id: true, startMinutes: true, endMinutes: true, groupId: true, roomId: true, teacherId: true }
+      select: { id: true, startMinutes: true, endMinutes: true, groupId: true, teacherId: true }
     });
 
     const overlapping = sameDay.find(
@@ -133,7 +150,7 @@ export async function POST(request: NextRequest) {
     );
     if (overlapping) {
       throw new BusinessRuleError(
-        "This time slot conflicts with another session for the same group, room or teacher.",
+        "This time slot conflicts with another session for the same group or teacher.",
         { code: "SESSION_CONFLICT", details: { conflictingSessionId: overlapping.id } }
       );
     }
@@ -143,7 +160,6 @@ export async function POST(request: NextRequest) {
         organizationId: ctx.organizationId,
         branchId: group.branchId,
         groupId: group.id,
-        roomId: group.roomId,
         teacherId: group.teacherId,
         assistantId: group.assistantId,
         date,

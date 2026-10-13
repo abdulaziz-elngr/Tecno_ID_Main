@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
+import { assertCanEditRole } from "@/lib/scope";
 import { ALL_PERMISSION_KEYS } from "@/lib/permissions";
 import { BusinessRuleError, created, handleApiError, ok, readJson } from "@/lib/api";
 
@@ -55,6 +56,7 @@ export async function POST(request: NextRequest) {
     if (unknown.length > 0) {
       throw new BusinessRuleError(`Unknown permission key(s): ${unknown.join(", ")}`);
     }
+    assertCanEditRole(ctx, null, input.permissionKeys);
 
     const existing = await db.role.findFirst({
       where: { organizationId: ctx.organizationId, name: input.name }
