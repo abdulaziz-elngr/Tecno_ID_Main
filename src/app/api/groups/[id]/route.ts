@@ -13,6 +13,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { isAssignableTeacher } from "@/lib/scope";
 import { countGroupDependencies, describeGroupBlockers, evaluateGroupDeletion } from "@/lib/group-safety";
 import { linkTeacherToSubject } from "@/lib/teacher-subjects";
+import { assertGroupInScope, resolveOwnGroupIds } from "@/lib/group-access";
 
 const SCOPE = "groups.detail";
 
@@ -43,6 +44,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       throw new ForbiddenError();
     }
 
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
+    assertGroupInScope(ownGroupIds, params.id);
     const group = await db.group.findFirst({
       where: {
         id: params.id,
@@ -54,6 +57,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         subject: { select: { id: true, name: true, code: true } },
         teacher: { select: { id: true, fullName: true } },
         assistant: { select: { id: true, fullName: true } },
+        assistants: { orderBy: { createdAt: "asc" }, select: { teacher: { select: { id: true, fullName: true } } } },
         schedules: { where: { isActive: true }, orderBy: { dayOfWeek: "asc" } },
         students: {
           where: { deletedAt: null },
@@ -93,6 +97,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       subject: group.subject,
       teacher: group.teacher,
       assistant: group.assistant,
+      assistants: group.assistants.map((a) => a.teacher),
       schedules: group.schedules,
       currentCount,
       remaining: Math.max(0, group.capacity - currentCount),
@@ -113,6 +118,8 @@ const updateSchema = z.object({
   subjectId: z.string().uuid().optional(),
   teacherId: z.string().uuid().nullable().optional(),
   assistantId: z.string().uuid().nullable().optional(),
+  // Full list of the group's assistants (replaces the current set). Takes precedence over `assistantId`.
+  assistantIds: z.array(z.string().uuid()).max(30).optional(),
   capacity: z.number().int().min(1).max(2000).optional(),
   notes: z.string().trim().max(2000).optional(),
   isActive: z.boolean().optional()
@@ -123,12 +130,24 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const ctx = await requirePermission("academic.groups.manage");
     const group = await db.group.findFirst({
       where: { id: params.id, deletedAt: null, branch: { center: { organizationId: ctx.organizationId } } },
-      include: { _count: { select: { students: { where: { deletedAt: null, status: "ACTIVE" } } } } }
+      include: {
+        _count: { select: { students: { where: { deletedAt: null, status: "ACTIVE" } } } },
+        assistants: { select: { teacherId: true } }
+      }
     });
     if (!group) throw new NotFoundError("Group not found.");
     resolveBranchScope(ctx, group.branchId);
 
-    const input = await readJson(request, updateSchema);
+    const { assistantIds: rawAssistantIds, assistantId: legacyAssistantId, ...input } = await readJson(request, updateSchema);
+    // undefined = leave the assistants alone; an array (possibly empty) = the new full set.
+    const assistantIds =
+      rawAssistantIds !== undefined
+        ? Array.from(new Set(rawAssistantIds))
+        : legacyAssistantId !== undefined
+          ? legacyAssistantId
+            ? [legacyAssistantId]
+            : []
+          : undefined;
 
     if (input.capacity !== undefined && input.capacity < group._count.students) {
       throw new BusinessRuleError(
@@ -140,8 +159,11 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     if (input.teacherId && input.teacherId !== group.teacherId && !(await isAssignableTeacher(ctx, input.teacherId))) {
       throw new BusinessRuleError("Invalid teacher.");
     }
-    if (input.assistantId && input.assistantId !== group.assistantId && !(await isAssignableTeacher(ctx, input.assistantId))) {
-      throw new BusinessRuleError("Invalid assistant.");
+    const currentAssistantIds = new Set(group.assistants.map((a) => a.teacherId));
+    for (const assistantId of assistantIds ?? []) {
+      if (!currentAssistantIds.has(assistantId) && !(await isAssignableTeacher(ctx, assistantId))) {
+        throw new BusinessRuleError("Invalid assistant.");
+      }
     }
 
     if (input.subjectId && input.subjectId !== group.subjectId) {
@@ -178,8 +200,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const updated = await db.$transaction(async (tx) => {
       const row = await tx.group.update({
         where: { id: group.id },
-        data: input
+        data: { ...input, ...(assistantIds ? { assistantId: assistantIds[0] ?? null } : {}) }
       });
+      if (assistantIds) {
+        await tx.groupAssistant.deleteMany({ where: { groupId: group.id, teacherId: { notIn: assistantIds } } });
+        const keep = new Set(currentAssistantIds);
+        const toCreate = assistantIds.filter((id) => !keep.has(id));
+        if (toCreate.length > 0) {
+          await tx.groupAssistant.createMany({
+            data: toCreate.map((teacherId) => ({ groupId: group.id, teacherId })),
+            skipDuplicates: true
+          });
+        }
+      }
       // Keep Subject -> Teacher in step with the group's responsible teacher.
       if (row.teacherId && row.subjectId) {
         await linkTeacherToSubject(tx, row.teacherId, row.subjectId);

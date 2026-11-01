@@ -6,6 +6,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { isAssignableTeacher } from "@/lib/scope";
 import { BusinessRuleError, created, handleApiError, ok, readJson, readQuery } from "@/lib/api";
 import { linkTeacherToSubject } from "@/lib/teacher-subjects";
+import { resolveOwnGroupIds } from "@/lib/group-access";
 
 const SCOPE = "groups";
 
@@ -25,6 +26,8 @@ const createGroupSchema = z.object({
   subjectId: z.string().uuid(),
   teacherId: z.string().uuid().optional(),
   assistantId: z.string().uuid().optional(),
+  // Any number of assistants may share a group. Takes precedence over `assistantId`.
+  assistantIds: z.array(z.string().uuid()).max(30).optional(),
   name: z.string().trim().min(1).max(100),
   capacity: z.number().int().min(1).max(2000),
   notes: z.string().trim().max(2000).optional()
@@ -40,6 +43,8 @@ const createGroupSchema = z.object({
 const GROUP_LIST_PERMISSIONS = [
   "academic.groups.manage",
   "students.view",
+  "payments.view",
+  "sessions.view",
   "parents.view",
   "teachers.view"
 ] as const;
@@ -49,10 +54,12 @@ export async function GET(request: NextRequest) {
     const ctx = await requireAnyPermission(GROUP_LIST_PERMISSIONS);
     const query = readQuery(request, listQuerySchema);
     const branchIds = resolveBranchScope(ctx, query.branchId);
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
 
     const groups = await db.group.findMany({
       where: {
         deletedAt: null,
+        ...(ownGroupIds ? { id: { in: ownGroupIds } } : {}),
         branch: { center: { organizationId: ctx.organizationId } },
         ...(branchIds ? { branchId: { in: branchIds } } : {}),
         ...(query.gradeId ? { gradeId: query.gradeId } : {}),
@@ -71,13 +78,16 @@ export async function GET(request: NextRequest) {
         subject: { select: { id: true, name: true, code: true } },
         teacher: { select: { id: true, fullName: true } },
         assistant: { select: { id: true, fullName: true } },
+        assistants: { orderBy: { createdAt: "asc" }, select: { teacher: { select: { id: true, fullName: true } } } },
         schedules: { where: { isActive: true }, orderBy: { dayOfWeek: "asc" } },
         _count: { select: { students: { where: { deletedAt: null, status: "ACTIVE" } } } }
       }
     });
 
-    const data = groups.map((g) => ({
+    const data = groups.map(({ assistants, ...g }) => ({
       ...g,
+      // Every assistant of the group (`assistant` above is just the first one).
+      assistants: assistants.map((a) => a.teacher),
       currentCount: g._count.students,
       remaining: Math.max(0, g.capacity - g._count.students),
       capacityPercent: g.capacity > 0 ? Math.round((g._count.students / g.capacity) * 1000) / 10 : 0,
@@ -123,8 +133,11 @@ export async function POST(request: NextRequest) {
     if (input.teacherId && !(await isAssignableTeacher(ctx, input.teacherId))) {
       throw new BusinessRuleError("Invalid teacher.", { status: 400 });
     }
-    if (input.assistantId && !(await isAssignableTeacher(ctx, input.assistantId))) {
-      throw new BusinessRuleError("Invalid assistant.", { status: 400 });
+    const assistantIds = Array.from(new Set(input.assistantIds ?? (input.assistantId ? [input.assistantId] : [])));
+    for (const assistantId of assistantIds) {
+      if (!(await isAssignableTeacher(ctx, assistantId))) {
+        throw new BusinessRuleError("Invalid assistant.", { status: 400 });
+      }
     }
 
     // Same name only once per (grade, subject). Soft-deleted groups still
@@ -153,7 +166,8 @@ export async function POST(request: NextRequest) {
           gradeId: input.gradeId,
           subjectId: input.subjectId,
           teacherId: input.teacherId,
-          assistantId: input.assistantId,
+          assistantId: assistantIds[0],
+          assistants: { create: assistantIds.map((teacherId) => ({ teacherId })) },
           name: input.name,
           capacity: input.capacity,
           notes: input.notes

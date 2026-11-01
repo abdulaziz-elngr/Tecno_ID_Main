@@ -42,6 +42,8 @@ export interface ScheduleConflictInput extends TimeRange {
   groupId: string;
   teacherId: string | null;
   assistantId: string | null;
+  /** Every assistant of the group (a group can have several); `assistantId` alone is only the first. */
+  assistantIds?: readonly string[];
   /** When updating an existing schedule row, exclude it from the conflict check. */
   excludeScheduleId?: string;
 }
@@ -62,6 +64,10 @@ export async function findScheduleConflicts(
     endMinutes: input.endMinutes
   };
 
+  const staffIds = Array.from(
+    new Set([input.teacherId, input.assistantId, ...(input.assistantIds ?? [])].filter((id): id is string => Boolean(id)))
+  );
+
   // Pull every active schedule on the same day that could plausibly
   // overlap (same group OR same teacher/assistant), then do the
   // precise overlap test in application code. Narrowing by day keeps
@@ -73,15 +79,24 @@ export async function findScheduleConflicts(
       ...(input.excludeScheduleId ? { id: { not: input.excludeScheduleId } } : {}),
       OR: [
         { groupId: input.groupId },
-        ...(input.teacherId
-          ? [{ group: { teacherId: input.teacherId } }, { group: { assistantId: input.teacherId } }]
-          : []),
-        ...(input.assistantId
-          ? [{ group: { teacherId: input.assistantId } }, { group: { assistantId: input.assistantId } }]
-          : [])
+        ...staffIds.flatMap((id) => [
+          { group: { teacherId: id } },
+          { group: { assistantId: id } },
+          { group: { assistants: { some: { teacherId: id } } } }
+        ])
       ]
     },
-    include: { group: { select: { id: true, name: true, teacherId: true, assistantId: true } } }
+    include: {
+      group: {
+        select: {
+          id: true,
+          name: true,
+          teacherId: true,
+          assistantId: true,
+          assistants: { select: { teacherId: true } }
+        }
+      }
+    }
   });
 
   const conflicts: ScheduleConflict[] = [];
@@ -103,9 +118,12 @@ export async function findScheduleConflicts(
       });
       continue;
     }
-    const teacherIds = [input.teacherId, input.assistantId].filter(Boolean);
-    const existingTeacherIds = [existing.group.teacherId, existing.group.assistantId].filter(Boolean);
-    if (teacherIds.some((id) => existingTeacherIds.includes(id))) {
+    const existingTeacherIds = [
+      existing.group.teacherId,
+      existing.group.assistantId,
+      ...existing.group.assistants.map((a) => a.teacherId)
+    ].filter(Boolean);
+    if (staffIds.some((id) => existingTeacherIds.includes(id))) {
       conflicts.push({
         type: "TEACHER",
         scheduleId: existing.id,

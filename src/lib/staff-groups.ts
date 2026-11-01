@@ -7,16 +7,19 @@ import { diffIds } from "./staff";
 /**
  * Group assignments for Teachers and Assistants.
  *
- * Data model (unchanged): `Group.teacherId` and `Group.assistantId` are the
- * single source of truth for "who is responsible for this group" — exams
- * authorization, session generation and the scheduling conflict rules all
- * read them. A teacher therefore already has MANY groups
- * (`Teacher.groupsAsTeacher`, `Teacher.groupsAsAssistant`); this module is the
- * one place that edits those rows, so the "teacher edit" form can add/remove
- * groups in a single transaction without a second, competing join table.
+ * Data model:
+ *  - a group has ONE teacher: `Group.teacherId`;
+ *  - a group has MANY assistants: the `GroupAssistant` join table is the source of
+ *    truth, and `Group.assistantId` is kept as a mirror of the FIRST assistant
+ *    because sessions and schedule-conflict checks still read it.
  *
- *  - a Teacher (isAssistant = false) owns groups through `teacherId`;
- *  - an Assistant (isAssistant = true) owns groups through `assistantId`.
+ * This module is the one place that edits those rows, so the "teacher edit" form
+ * can add/remove groups in a single transaction.
+ *
+ *  - a Teacher (isAssistant = false) owns groups through `teacherId`
+ *    (a group already held by another teacher needs an explicit takeover);
+ *  - an Assistant (isAssistant = true) joins groups through `GroupAssistant`
+ *    (any number of assistants may share a group — no takeover).
  */
 
 type Client = Prisma.TransactionClient | typeof db;
@@ -25,6 +28,21 @@ export type StaffGroupField = "teacherId" | "assistantId";
 
 export function staffGroupField(isAssistant: boolean): StaffGroupField {
   return isAssistant ? "assistantId" : "teacherId";
+}
+
+/**
+ * Keeps `Group.assistantId` equal to the first remaining assistant (or NULL) for the
+ * given groups. Call it after every change of the `GroupAssistant` rows.
+ */
+export async function syncPrimaryAssistants(tx: Client, groupIds: readonly string[]): Promise<void> {
+  for (const groupId of Array.from(new Set(groupIds))) {
+    const first = await tx.groupAssistant.findFirst({
+      where: { groupId },
+      orderBy: { createdAt: "asc" },
+      select: { teacherId: true }
+    });
+    await tx.group.update({ where: { id: groupId }, data: { assistantId: first?.teacherId ?? null } });
+  }
 }
 
 export interface GroupWithSchedules {
@@ -119,10 +137,17 @@ export async function planStaffGroupSync(
     });
   }
 
-  const currentRows = await client.group.findMany({
-    where: { deletedAt: null, [field]: staff.id },
-    select: { id: true }
-  });
+  const currentRows = staff.isAssistant
+    ? (
+        await client.groupAssistant.findMany({
+          where: { teacherId: staff.id, group: { deletedAt: null } },
+          select: { groupId: true }
+        })
+      ).map((r) => ({ id: r.groupId }))
+    : await client.group.findMany({
+        where: { deletedAt: null, teacherId: staff.id },
+        select: { id: true }
+      });
   const { toAdd, toRemove } = diffIds(
     currentRows.map((g) => g.id),
     groupIds
@@ -132,7 +157,8 @@ export async function planStaffGroupSync(
 
   const takeovers: GroupTakeover[] = [];
   for (const g of addedGroups) {
-    const owner = staff.isAssistant ? g.assistant : g.teacher;
+    // Assistants can share a group, so only a TEACHER can take a group from someone.
+    const owner = staff.isAssistant ? null : g.teacher;
     if (owner && owner.id !== staff.id) {
       takeovers.push({ groupId: g.id, groupName: g.name, currentStaffId: owner.id, currentStaffName: owner.fullName });
     }
@@ -167,6 +193,19 @@ export async function applyStaffGroupPlan(
   staffId: string,
   plan: StaffGroupPlan
 ): Promise<void> {
+  if (plan.field === "assistantId") {
+    if (plan.toRemove.length > 0) {
+      await tx.groupAssistant.deleteMany({ where: { teacherId: staffId, groupId: { in: plan.toRemove } } });
+    }
+    if (plan.toAdd.length > 0) {
+      await tx.groupAssistant.createMany({
+        data: plan.toAdd.map((groupId) => ({ groupId, teacherId: staffId })),
+        skipDuplicates: true
+      });
+    }
+    await syncPrimaryAssistants(tx, [...plan.toRemove, ...plan.toAdd]);
+    return;
+  }
   if (plan.toRemove.length > 0) {
     await tx.group.updateMany({
       where: { id: { in: plan.toRemove }, [plan.field]: staffId },
@@ -186,10 +225,18 @@ export async function releaseStaffGroups(
   tx: Prisma.TransactionClient,
   staff: { id: string; isAssistant: boolean }
 ): Promise<string[]> {
-  const field = staffGroupField(staff.isAssistant);
-  const rows = await tx.group.findMany({ where: { [field]: staff.id }, select: { id: true } });
+  if (staff.isAssistant) {
+    const links = await tx.groupAssistant.findMany({ where: { teacherId: staff.id }, select: { groupId: true } });
+    const legacy = await tx.group.findMany({ where: { assistantId: staff.id }, select: { id: true } });
+    const ids = Array.from(new Set([...links.map((l) => l.groupId), ...legacy.map((g) => g.id)]));
+    if (links.length > 0) await tx.groupAssistant.deleteMany({ where: { teacherId: staff.id } });
+    // Hands the "first assistant" slot to the next assistant of each group (or clears it).
+    await syncPrimaryAssistants(tx, ids);
+    return ids;
+  }
+  const rows = await tx.group.findMany({ where: { teacherId: staff.id }, select: { id: true } });
   if (rows.length > 0) {
-    await tx.group.updateMany({ where: { [field]: staff.id }, data: { [field]: null } });
+    await tx.group.updateMany({ where: { teacherId: staff.id }, data: { teacherId: null } });
   }
   return rows.map((r) => r.id);
 }

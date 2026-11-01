@@ -25,6 +25,13 @@ const GROUP_BRIEF = {
   select: { id: true, name: true, grade: { select: { name: true } }, subject: { select: { id: true, name: true } } }
 } as const;
 
+/** Groups an ASSISTANT works in (many assistants may share one group). */
+const ASSISTANT_LINKS = {
+  where: { group: { deletedAt: null } },
+  orderBy: { group: { name: "asc" } },
+  select: { group: { select: { id: true, name: true, grade: { select: { name: true } }, subject: { select: { id: true, name: true } } } } }
+} as const;
+
 export async function GET(request: NextRequest) {
   try {
     const ctx = await requirePermission("teachers.view");
@@ -65,22 +72,22 @@ export async function GET(request: NextRequest) {
           userId: true,
           branch: { select: { id: true, name: true } },
           groupsAsTeacher: GROUP_BRIEF,
-          groupsAsAssistant: GROUP_BRIEF,
+          assistantLinks: ASSISTANT_LINKS,
           teacherSubjects: { select: { subject: { select: { id: true, name: true, deletedAt: true } } } }
         }
       })
     ]);
 
-    // A teacher is responsible for `groupsAsTeacher`, an assistant for
-    // `groupsAsAssistant`; expose just the relevant one as `groups`.
-    const data = rows.map(({ groupsAsTeacher, groupsAsAssistant, teacherSubjects, ...rest }) => ({
+    // A teacher is responsible for `groupsAsTeacher`, an assistant for the groups
+    // he is linked to (`assistantLinks`); expose just the relevant one as `groups`.
+    const data = rows.map(({ groupsAsTeacher, assistantLinks, teacherSubjects, ...rest }) => ({
       ...rest,
       // Subjects this teacher teaches (Teacher -> Subject), alphabetical.
       subjects: teacherSubjects
         .filter((ts) => ts.subject.deletedAt === null)
         .map((ts) => ({ id: ts.subject.id, name: ts.subject.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
-      groups: (rest.isAssistant ? groupsAsAssistant : groupsAsTeacher).map((g) => ({
+      groups: (rest.isAssistant ? assistantLinks.map((l) => l.group) : groupsAsTeacher).map((g) => ({
         id: g.id,
         name: g.name,
         gradeName: g.grade.name,

@@ -169,7 +169,8 @@ function TeachersPage() {
       : g.name;
   /** Who currently holds the group in the column this person would use (null when free or already theirs). */
   function currentOwner(g: GroupOption): string | null {
-    const owner = form.isAssistant ? g.assistant : g.teacher;
+    // Assistants can share a group, so only the TEACHER column can already be "taken".
+    const owner = form.isAssistant ? null : g.teacher;
     return owner && owner.id !== editingId ? owner.fullName : null;
   }
 

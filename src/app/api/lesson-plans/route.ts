@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
-import { requirePermission } from "@/lib/rbac";
+import { requireAnyPermission, requirePermission } from "@/lib/rbac";
 import { handleApiError, ok, created, readJson, readQuery, clientIp } from "@/lib/api";
 import { createPlan, listPlans } from "@/lib/lesson-plan-data";
 
@@ -9,6 +9,9 @@ import { createPlan, listPlans } from "@/lib/lesson-plan-data";
  *   GET  — plans (with their numbered lessons) filtered by month / group / stage / grade / subject.
  *   POST — confirm a reviewed plan: creates the numbered, dated lessons of one group for one month.
  */
+
+/** Who may form lessons. Teaching logins are further limited to their own groups in lesson-plan-data.ts. */
+const PLAN_PERMISSIONS = ["sessions.create", "lessons.plan"] as const;
 
 const listSchema = z.object({
   branchId: z.string().uuid().optional(),
@@ -48,7 +51,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const ctx = await requirePermission("sessions.create");
+    const ctx = await requireAnyPermission(PLAN_PERMISSIONS);
     const input = await readJson(request, createSchema);
     return created(await createPlan(ctx, input, clientIp(request)));
   } catch (err) {

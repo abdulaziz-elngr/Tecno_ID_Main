@@ -139,7 +139,8 @@ export async function POST(request: NextRequest) {
         deletedAt: null,
         branch: { center: { organizationId: ctx.organizationId } },
         ...(branchIds ? { branchId: { in: branchIds } } : {})
-      }
+      },
+      include: { assistants: { select: { teacherId: true } } }
     });
     if (!group) {
       return NextResponse.json({ error: "Invalid group." }, { status: 400 });
@@ -150,6 +151,7 @@ export async function POST(request: NextRequest) {
       groupId: input.groupId,
       teacherId: group.teacherId,
       assistantId: group.assistantId,
+      assistantIds: group.assistants.map((a) => a.teacherId),
       dayOfWeek: input.dayOfWeek,
       startMinutes,
       endMinutes

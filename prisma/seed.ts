@@ -284,6 +284,7 @@ async function main() {
         subjectId: subject.id,
         teacherId: teacher.id,
         assistantId: def.name === "G3" ? assistant.id : undefined,
+        ...(def.name === "G3" ? { assistants: { create: [{ teacherId: assistant.id }] } } : {}),
         name: def.name,
         capacity: def.capacity,
       },
@@ -305,15 +306,15 @@ async function main() {
   // attendance — this student can scan at G3 and trigger the
   // "Student belongs to another group" confirmation flow). ---
   const demoStudentDefs = [
-    { name: "Ahmed Mohamed", group: groupG3 },
-    { name: "Sara Ali", group: groupG3 },
-    { name: "Youssef Hassan", group: groupG3 },
-    { name: "Mariam Adel", group: groupG1 },
+    { name: "Ahmed Mohamed", group: groupG3, grade: { name: "Grade 3", order: 2 } },
+    { name: "Sara Ali", group: groupG3, grade: { name: "Grade 3", order: 2 } },
+    { name: "Youssef Hassan", group: groupG3, grade: { name: "Grade 3", order: 2 } },
+    { name: "Mariam Adel", group: groupG1, grade: { name: "Grade 1", order: 0 } },
   ];
   let parentPhoneCounter = 1;
   const students: { id: string; fullName: string; groupId: string }[] = [];
   for (const def of demoStudentDefs) {
-    const studentCode = await generateStudentCode();
+    const studentCode = await generateStudentCode(def.grade);
     const student = await db.student.create({
       data: {
         organizationId: org.id,

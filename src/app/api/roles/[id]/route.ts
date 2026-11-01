@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac";
+import { clearAuthContextCache, requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
 import { assertCanEditRole } from "@/lib/scope";
 import { ALL_PERMISSION_KEYS } from "@/lib/permissions";
@@ -87,6 +87,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     });
 
     const after = await loadRole(ctx.organizationId, params.id);
+    clearAuthContextCache(); // permissions/roles/branches changed — drop the cached auth context
     return ok({
       id: after.id,
       name: after.name,
@@ -128,6 +129,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
       reason
     });
 
+    clearAuthContextCache(); // permissions/roles/branches changed — drop the cached auth context
     return ok({ id: role.id, deleted: true });
   } catch (err) {
     return handleApiError(SCOPE, err);

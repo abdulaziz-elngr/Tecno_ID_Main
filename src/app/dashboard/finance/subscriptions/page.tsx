@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useI18n } from "@/lib/i18n";
 import { apiPost, currentMonth, formatDate, formatMoneyClient, qs, useApi } from "@/lib/client";
+import { MonthYearPicker } from "@/components/MonthYearPicker";
 import { Badge, DataTable, ErrorNotice, Field, Modal, PageHeader, Pager, StatCard, useToast } from "@/components/ui";
 
 interface FeeHistory {
@@ -152,7 +153,7 @@ export default function SubscriptionsPage() {
       <h2 className="text-lg font-semibold">{t("sub.charges")}</h2>
       <div className="card grid gap-3 p-4 sm:grid-cols-2">
         <Field label={t("common.month")}>
-          {(id) => <input id={id} type="month" className="input" value={month} onChange={(e) => { setPage(1); setMonth(e.target.value); }} />}
+          {(id) => <MonthYearPicker id={id} value={month} onChange={(v) => { setPage(1); setMonth(v); }} />}
         </Field>
         <Field label={t("common.status")}>
           {(id) => (

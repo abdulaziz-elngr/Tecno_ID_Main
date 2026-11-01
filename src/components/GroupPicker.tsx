@@ -64,6 +64,13 @@ export function GroupPicker({
     }
   }, [groupId, usable, stageId]);
 
+  // Only one active stage → select it right away.
+  useEffect(() => {
+    if (groupId || stageId) return;
+    const active = (stages ?? []).filter((s) => includeInactive || s.isActive);
+    if (active.length === 1) setStageId(active[0]!.id);
+  }, [stages, stageId, groupId, includeInactive]);
+
   const grades = stages?.find((s) => s.id === stageId)?.grades.filter((g) => includeInactive || g.isActive) ?? [];
   const groupsInGrade = usable.filter((g) => g.gradeId === gradeId);
   const subjects = useMemo(() => {
@@ -71,6 +78,12 @@ export function GroupPicker({
     for (const g of groupsInGrade) if (g.subject) map.set(g.subject.id, g.subject.name);
     return [...map.entries()].map(([id, name]) => ({ id, name }));
   }, [groupsInGrade]);
+
+  // Only one subject for the chosen grade → select it right away.
+  useEffect(() => {
+    if (!subjectId && subjects.length === 1) setSubjectId(subjects[0]!.id);
+  }, [subjects, subjectId]);
+
   const groupOptions = groupsInGrade.filter((g) => !subjectId || g.subject?.id === subjectId);
 
   return (

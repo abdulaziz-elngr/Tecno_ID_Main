@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
+import { groupIdFilter, resolveOwnGroupIds } from "@/lib/group-access";
 import { handleApiError, ok, readJson, clientIp, userAgent, BusinessRuleError } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { evaluateAttendance, normalizeScanInput, type AttendanceFacts } from "@/lib/attendance";
@@ -55,37 +56,9 @@ export async function POST(request: NextRequest) {
     const input = await readJson(request, scanSchema);
     const code = normalizeScanInput(input.code);
 
-    const session = await db.classSession.findFirst({
-      where: {
-        id: input.sessionId,
-        organizationId: ctx.organizationId,
-        ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } })
-      },
-      include: {
-        group: {
-          select: {
-            id: true,
-            name: true,
-            capacity: true,
-            gradeId: true,
-            grade: { select: { name: true, stage: { select: { name: true } } } }
-          }
-        }
-      }
-    });
-    if (!session) {
-      return ok(
-        {
-          status: "REJECTED",
-          code: "SESSION_NOT_FOUND",
-          message: "Session not found or outside your branch scope."
-        },
-        { status: 404 }
-      );
-    }
-    resolveBranchScope(ctx, session.branchId);
-
-    const student = await db.student.findFirst({
+    // Latency matters here (a queue of kids at the door): every independent query
+    // below runs in parallel instead of one after the other.
+    const studentPromise = db.student.findFirst({
       where: {
         organizationId: ctx.organizationId,
         deletedAt: null,
@@ -99,9 +72,50 @@ export async function POST(request: NextRequest) {
         status: true,
         branchId: true,
         groupId: true,
+        gradeId: true,
+        enrollmentDate: true,
         group: { select: { id: true, name: true, grade: { select: { name: true, stage: { select: { name: true } } } } } }
       }
     });
+    const sessionPromise = (async () => {
+      const ownGroupIds = await resolveOwnGroupIds(ctx);
+      return db.classSession.findFirst({
+        where: {
+          id: input.sessionId,
+          organizationId: ctx.organizationId,
+          ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } }),
+          ...groupIdFilter(ownGroupIds)
+        },
+        include: {
+          group: {
+            select: {
+              id: true,
+              name: true,
+              capacity: true,
+              gradeId: true,
+              subjectId: true,
+              grade: { select: { name: true, stage: { select: { name: true } } } }
+            }
+          }
+        }
+      });
+    })();
+    // Avoid an unhandled rejection if the other promise throws first.
+    studentPromise.catch(() => {});
+    sessionPromise.catch(() => {});
+    const [session, student] = await Promise.all([sessionPromise, studentPromise]);
+
+    if (!session) {
+      return ok(
+        {
+          status: "REJECTED",
+          code: "SESSION_NOT_FOUND",
+          message: "Session not found or outside your branch scope."
+        },
+        { status: 404 }
+      );
+    }
+    resolveBranchScope(ctx, session.branchId);
 
     if (!student) {
       return ok(
@@ -114,39 +128,40 @@ export async function POST(request: NextRequest) {
     // session by an operator who has no access to that student.
     resolveBranchScope(ctx, student.branchId);
 
-    const [existing, attendeeCount] = await Promise.all([
-      db.attendance.findFirst({
-        where: { sessionId: session.id, studentId: student.id, deletedAt: null },
-        select: { id: true, type: true, recordedAt: true }
-      }),
-      db.attendance.count({ where: { sessionId: session.id, deletedAt: null } })
-    ]);
     const monthStart = new Date(Date.UTC(session.date.getUTCFullYear(), session.date.getUTCMonth(), 1));
 
-    const makeUpsThisMonth = await db.attendance.count({
-      where: {
-        studentId: student.id,
-        type: "MAKE_UP",
-        deletedAt: null,
-        recordedAt: { gte: monthStart }
-      }
-    });
+    const [existing, attendeeCount, makeUpsThisMonth, origin, rules, lateThreshold, timeZone, snapshot] =
+      await Promise.all([
+        db.attendance.findFirst({
+          where: { sessionId: session.id, studentId: student.id, deletedAt: null },
+          select: { id: true, type: true, recordedAt: true }
+        }),
+        db.attendance.count({ where: { sessionId: session.id, deletedAt: null } }),
+        db.attendance.count({
+          where: {
+            studentId: student.id,
+            type: "MAKE_UP",
+            deletedAt: null,
+            recordedAt: { gte: monthStart }
+          }
+        }),
+        input.originSessionId
+          ? db.classSession.findFirst({
+              where: { id: input.originSessionId, organizationId: ctx.organizationId },
+              select: { date: true }
+            })
+          : Promise.resolve(null),
+        getMakeUpRules(ctx.organizationId),
+        getLateThresholdMinutes(ctx.organizationId),
+        getCenterTimeZone(session.branchId),
+        // Stage 2: everything the operator needs to know about this student,
+        // returned with EVERY outcome so it is on screen the moment of the scan.
+        snapshotFor(ctx, { ...session, group: { subjectId: session.group.subjectId } }, student)
+      ]);
 
-    let daysSinceOrigin: number | null = null;
-    if (input.originSessionId) {
-      const origin = await db.classSession.findFirst({
-        where: { id: input.originSessionId, organizationId: ctx.organizationId },
-        select: { date: true }
-      });
-      if (origin) {
-        daysSinceOrigin = Math.round((session.date.getTime() - origin.date.getTime()) / 86400000);
-      }
-    }
-
-    const [rules, lateThreshold] = await Promise.all([
-      getMakeUpRules(ctx.organizationId),
-      getLateThresholdMinutes(ctx.organizationId)
-    ]);
+    const daysSinceOrigin: number | null = origin
+      ? Math.round((session.date.getTime() - origin.date.getTime()) / 86400000)
+      : null;
 
     const canOverrideCapacity = ctx.permissions.has("academic.groups.manage") && Boolean(input.overrideCapacity);
 
@@ -160,12 +175,7 @@ export async function POST(request: NextRequest) {
       daysSinceOriginSession: daysSinceOrigin,
       confirmMakeUp: Boolean(input.confirmMakeUp),
       overrideCapacity: canOverrideCapacity,
-      minutesAfterStart: minutesAfterStart(
-        session.date,
-        session.startMinutes,
-        new Date(),
-        await getCenterTimeZone(session.branchId)
-      ),
+      minutesAfterStart: minutesAfterStart(session.date, session.startMinutes, new Date(), timeZone),
       sessionStatus: session.status,
       requiresExplicitOpen: session.planId !== null,
       studentStatus: student.status,
@@ -181,9 +191,6 @@ export async function POST(request: NextRequest) {
       photoUrl: student.photoUrl,
       currentGroup: student.group
     };
-    // Stage 2: everything the operator needs to know about this student,
-    // returned with EVERY outcome so it is on screen the moment of the scan.
-    const snapshot = await snapshotFor(ctx, session, student);
     const sessionCard = {
       id: session.id,
       lessonNumber: session.lessonNumber,
@@ -239,14 +246,16 @@ export async function POST(request: NextRequest) {
     // Legacy (unnumbered) sessions are still opened by the first scan. Lessons
     // of a monthly plan never get here while SCHEDULED: evaluateAttendance()
     // refuses them with LESSON_NOT_OPEN until an operator opens the lesson.
-    if (session.status === "SCHEDULED" && session.planId === null) {
-      await db.classSession.update({
-        where: { id: session.id },
-        data: { status: "OPEN", openedAt: new Date() }
-      });
-    }
+    // The session update and the audit row are independent: run them together.
+    const openLegacySession =
+      session.status === "SCHEDULED" && session.planId === null
+        ? db.classSession.update({
+            where: { id: session.id },
+            data: { status: "OPEN", openedAt: new Date() }
+          })
+        : Promise.resolve(null);
 
-    await writeAuditLog({
+    const auditPromise = writeAuditLog({
       organizationId: ctx.organizationId,
       actorUserId: ctx.userId,
       action: decision.isMakeUp ? "RECORD_MAKEUP_ATTENDANCE" : "RECORD_ATTENDANCE",
@@ -256,6 +265,7 @@ export async function POST(request: NextRequest) {
       reason: input.makeUpReason,
       ipAddress: clientIp(request)
     });
+    await Promise.all([openLegacySession, auditPromise]);
 
     if (decision.type === "LATE") {
       // Awaited (serverless may freeze after the response); dispatchEvent never throws.

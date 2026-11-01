@@ -1,3 +1,4 @@
+import { assertGroupInScope, groupIdFilter, resolveOwnGroupIds } from "./group-access";
 import type { DayOfWeek, Prisma } from "@prisma/client";
 import { db } from "./db";
 import { BusinessRuleError, NotFoundError } from "./api";
@@ -47,6 +48,8 @@ export async function loadGroupForPlanning(ctx: AuthContext, groupId: string): P
   });
   if (!group) throw new NotFoundError("Group not found.");
   resolveBranchScope(ctx, group.branchId);
+  // A teacher / assistant may only form the lessons of the groups he is responsible for.
+  assertGroupInScope(await resolveOwnGroupIds(ctx), group.id);
 
   if (!group.isActive) {
     throw new BusinessRuleError("This group is inactive. Lessons cannot be formed for it.", {
@@ -319,6 +322,7 @@ export async function listPlans(
   }
 ): Promise<ListedPlan[]> {
   const branchIds = resolveBranchScope(ctx, filter.branchId);
+  const ownGroupIds = await resolveOwnGroupIds(ctx);
 
   const groupWhere: Prisma.GroupWhereInput = {
     ...(filter.gradeId ? { gradeId: filter.gradeId } : {}),
@@ -330,7 +334,7 @@ export async function listPlans(
     where: {
       organizationId: ctx.organizationId,
       ...(branchIds ? { branchId: { in: branchIds } } : {}),
-      ...(filter.groupId ? { groupId: filter.groupId } : {}),
+      ...groupIdFilter(ownGroupIds, filter.groupId),
       ...(filter.year ? { year: filter.year } : {}),
       ...(filter.month ? { month: filter.month } : {}),
       ...(Object.keys(groupWhere).length ? { group: groupWhere } : {})
@@ -402,6 +406,7 @@ export async function deletePlan(ctx: AuthContext, planId: string, ipAddress?: s
     }
   });
   if (!plan) throw new NotFoundError("Lesson plan not found.");
+  assertGroupInScope(await resolveOwnGroupIds(ctx), plan.groupId);
 
   const deletable = isPlanDeletable(
     plan.sessions.map((s) => ({ status: s.status as LessonStatus, attendanceCount: s._count.attendances }))

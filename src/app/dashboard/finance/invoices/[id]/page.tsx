@@ -62,7 +62,7 @@ export default function InvoiceDetailPage() {
     <div className="space-y-5">
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <PageHeader title={invoice.invoiceNumber} description={formatDate(invoice.issuedAt)} />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-secondary" onClick={() => router.push("/dashboard/finance/invoices")}>
             {t("common.back")}
           </button>
@@ -74,8 +74,8 @@ export default function InvoiceDetailPage() {
 
       <ErrorNotice message={error} />
 
-      <div className="print-sheet card mx-auto max-w-2xl space-y-6 p-8">
-        <div className="flex items-start justify-between gap-3 border-b border-black/10 pb-4 dark:border-white/10">
+      <div className="print-sheet card mx-auto max-w-2xl space-y-6 p-4 sm:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-black/10 pb-4 dark:border-white/10">
           <div className="flex items-center gap-3">
             {center.logoUrl && (
               <Image src={center.logoUrl} alt={center.name} width={56} height={56} className="rounded-lg object-contain" unoptimized />
@@ -116,6 +116,7 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
 
+        <div className="overflow-x-auto">
         <table className="w-full text-start text-sm">
           <thead className="border-b border-black/10 text-black/60 dark:border-white/10 dark:text-white/60">
             <tr>
@@ -140,6 +141,7 @@ export default function InvoiceDetailPage() {
             )}
           </tbody>
         </table>
+        </div>
 
         <div className="ms-auto max-w-xs space-y-1 text-sm">
           <div className="flex justify-between gap-3">

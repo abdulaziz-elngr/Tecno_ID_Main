@@ -1,7 +1,8 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, type AuthContext } from "@/lib/rbac";
+import { groupIdFilter, resolveOwnGroupIds } from "@/lib/group-access";
 import { handleApiError, ok, readJson, NotFoundError, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
 import { canCancelLesson } from "@/lib/lesson-flow";
@@ -12,12 +13,14 @@ const patchSchema = z.object({
   reason: z.string().trim().min(3).max(500).optional()
 });
 
-async function findScoped(ctx: { organizationId: string; isOrgWide: boolean; branchIds: string[] }, id: string) {
+async function findScoped(ctx: AuthContext, id: string) {
+  const ownGroupIds = await resolveOwnGroupIds(ctx);
   return db.classSession.findFirst({
     where: {
       id,
       organizationId: ctx.organizationId,
-      ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } })
+      ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } }),
+      ...groupIdFilter(ownGroupIds)
     }
   });
 }
@@ -25,11 +28,13 @@ async function findScoped(ctx: { organizationId: string; isOrgWide: boolean; bra
 export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const ctx = await requirePermission("sessions.view");
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
     const session = await db.classSession.findFirst({
       where: {
         id: params.id,
         organizationId: ctx.organizationId,
-        ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } })
+        ...(ctx.isOrgWide ? {} : { branchId: { in: ctx.branchIds } }),
+        ...groupIdFilter(ownGroupIds)
       },
       include: {
         group: {

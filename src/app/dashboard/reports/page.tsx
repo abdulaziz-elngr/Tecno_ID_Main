@@ -8,6 +8,9 @@ import { formatMoneyClient, qs, todayISO, useApi } from "@/lib/client";
 interface FinancialReport {
   summary: {
     revenue: number;
+    bookRevenue?: number;
+    deductions?: number;
+    net?: number;
     billed: number;
     collected: number;
     outstanding: number;
@@ -117,6 +120,15 @@ export default function ReportsPage() {
                 <StatCard label="Revenue" value={formatMoneyClient(financial.summary.revenue)} tone="positive" />
                 <StatCard label="Outstanding" value={formatMoneyClient(financial.summary.outstanding)} tone="negative" />
                 <StatCard label="Collection rate" value={`${financial.summary.collectionRate}%`} />
+                {financial.summary.bookRevenue !== undefined && (
+                  <StatCard label={t("tre.books")} value={formatMoneyClient(financial.summary.bookRevenue)} tone="positive" />
+                )}
+                {financial.summary.deductions !== undefined && (
+                  <StatCard label={t("tre.deductions")} value={formatMoneyClient(financial.summary.deductions)} tone={financial.summary.deductions > 0 ? "warning" : "default"} />
+                )}
+                {financial.summary.net !== undefined && (
+                  <StatCard label={t("tre.net")} value={formatMoneyClient(financial.summary.net)} tone={financial.summary.net < 0 ? "negative" : "positive"} />
+                )}
               </div>
               {financial.series.length > 0 && (
                 <div className="card p-4">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useI18n } from "@/lib/i18n";
 import { apiPost, formatDate, qs, todayISO, useApi } from "@/lib/client";
 import { fmt } from "@/lib/lesson-format";
@@ -86,6 +86,12 @@ export default function StudentPerformancePage() {
   const [groupId, setGroupId] = useState("");
   const [days, setDays] = useState("90");
   const [historyPage, setHistoryPage] = useState(1);
+
+  // Only one active stage → select it right away.
+  useEffect(() => {
+    const active = (stages ?? []).filter((s) => s.isActive);
+    if (!stageId && active.length === 1) setStageId(active[0]!.id);
+  }, [stages, stageId]);
 
   const gradeOptions = stages?.find((s) => s.id === stageId)?.grades.filter((g) => g.isActive) ?? [];
   const groupOptions = useMemo(

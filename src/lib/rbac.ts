@@ -1,5 +1,6 @@
 import { db } from "./db";
-import { getSessionPayload } from "./session";
+import { validateSessionRow, verifySessionCookie } from "./session";
+import { TtlCache } from "./ttl-cache";
 
 /**
  * RBAC + scope resolution.
@@ -40,12 +41,45 @@ export class ForbiddenError extends Error {
 
 export const ORG_WIDE_ROLES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "CENTER_OWNER"]);
 
+/** Logins that work with their own groups only; they never get the "no branch = all branches" fallback. */
+const TEACHING_ROLES: ReadonlySet<string> = new Set(["TEACHER", "TEACHER_ASSISTANT"]);
+
+/**
+ * Building the context walks user → roles → permissions (a deep join) and, for
+ * staff, the branch list: several queries on EVERY API call. Cache the result
+ * briefly; role/permission edits show up within AUTH_CACHE_MS. Call
+ * `clearAuthContextCache()` after changing users, roles or permissions to apply
+ * them immediately.
+ */
+const AUTH_CACHE_MS = 20 * 1000;
+const authContextCache = new TtlCache<AuthContext>(AUTH_CACHE_MS, 500);
+
+export function clearAuthContextCache(): void {
+  authContextCache.clear();
+}
+
 export async function getAuthContext(): Promise<AuthContext | null> {
-  const payload = await getSessionPayload();
+  // The JWT is verified locally (no database), so its `sub` can be trusted to start
+  // loading the user's permissions at the same time as the session row is checked.
+  // On a cold instance that is ONE database round trip of waiting instead of two.
+  const payload = await verifySessionCookie();
   if (!payload) return null;
 
+  const cached = authContextCache.get(payload.sub);
+  const [sessionOk, ctx] = await Promise.all([
+    validateSessionRow(payload),
+    cached ? Promise.resolve(cached) : loadAuthContext(payload.sub)
+  ]);
+
+  // A revoked / expired session never gets (or caches) a context.
+  if (!sessionOk || !ctx) return null;
+  if (!cached) authContextCache.set(payload.sub, ctx);
+  return ctx;
+}
+
+async function loadAuthContext(userId: string): Promise<AuthContext | null> {
   const user = await db.user.findUnique({
-    where: { id: payload.sub },
+    where: { id: userId },
     include: {
       userRoles: { include: { role: { include: { rolePermissions: { include: { permission: true } } } } } },
       userBranches: true
@@ -65,13 +99,26 @@ export async function getAuthContext(): Promise<AuthContext | null> {
 
   const isOrgWide = roleNames.some((r) => ORG_WIDE_ROLES.has(r));
 
+  let branchIds = user.userBranches.map((ub) => ub.branchId);
+  // The Users screen promises "leave the branch empty = every branch", so a staff login
+  // (accountant, manager, receptionist...) with NO branch assigned sees all branches of
+  // the organization — instead of an empty list everywhere. Teaching logins are the
+  // exception: they stay limited to what is explicitly assigned to them.
+  if (!isOrgWide && branchIds.length === 0 && !roleNames.some((r) => TEACHING_ROLES.has(r))) {
+    const all = await db.branch.findMany({
+      where: { deletedAt: null, center: { organizationId: user.organizationId } },
+      select: { id: true }
+    });
+    branchIds = all.map((b) => b.id);
+  }
+
   return {
     userId: user.id,
     organizationId: user.organizationId,
     fullName: user.fullName,
     permissions,
     roleNames,
-    branchIds: user.userBranches.map((ub) => ub.branchId),
+    branchIds,
     isOrgWide
   };
 }

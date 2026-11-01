@@ -1,3 +1,4 @@
+import { groupIdFilter, resolveOwnGroupIds } from "@/lib/group-access";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -7,6 +8,10 @@ import { toDateOnly } from "@/lib/sessions";
 import { round2 } from "@/lib/billing";
 import { loadLedgerEnv, loadLedgers } from "@/lib/payment-ledger";
 import { outstandingMonths } from "@/lib/subscription-months";
+import { treasurySummary } from "@/lib/treasury";
+
+/** These routes build a ledger for every student; give them room on serverless. */
+export const maxDuration = 30;
 
 /**
  * Dashboard statistics (spec §8).
@@ -35,6 +40,9 @@ export async function GET(request: NextRequest) {
     const today = toDateOnly(new Date());
     const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
     const branchFilter = branchIds ? { in: branchIds } : undefined;
+    // Teaching logins only see numbers for their own groups.
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
+    const ownGroup = groupIdFilter(ownGroupIds);
 
     const [totalStudents, activeStudents, totalTeachers, totalGroups, totalBranches] =
       await Promise.all([
@@ -42,6 +50,7 @@ export async function GET(request: NextRequest) {
           where: {
             organizationId: ctx.organizationId,
             deletedAt: null,
+            ...ownGroup,
             ...(branchFilter ? { branchId: branchFilter } : {})
           }
         }),
@@ -50,6 +59,7 @@ export async function GET(request: NextRequest) {
             organizationId: ctx.organizationId,
             deletedAt: null,
             status: "ACTIVE",
+            ...ownGroup,
             ...(branchFilter ? { branchId: branchFilter } : {})
           }
         }),
@@ -58,6 +68,7 @@ export async function GET(request: NextRequest) {
             organizationId: ctx.organizationId,
             deletedAt: null,
             isActive: true,
+            ...(ownGroupIds ? { id: "__none__" } : {}),
             ...(branchFilter ? { branchId: branchFilter } : {})
           }
         }),
@@ -65,6 +76,7 @@ export async function GET(request: NextRequest) {
           where: {
             deletedAt: null,
             isActive: true,
+            ...(ownGroupIds ? { id: { in: ownGroupIds } } : {}),
             branch: { center: { organizationId: ctx.organizationId } },
             ...(branchFilter ? { branchId: branchFilter } : {})
           }
@@ -85,6 +97,7 @@ export async function GET(request: NextRequest) {
       const attendanceWhere = {
         organizationId: ctx.organizationId,
         deletedAt: null,
+        ...ownGroup,
         ...(branchFilter ? { branchId: branchFilter } : {}),
         session: { date: today }
       };
@@ -95,6 +108,7 @@ export async function GET(request: NextRequest) {
           where: {
             organizationId: ctx.organizationId,
             date: today,
+            ...ownGroup,
             status: { not: "CANCELLED" },
             ...(branchFilter ? { branchId: branchFilter } : {})
           }
@@ -179,6 +193,13 @@ export async function GET(request: NextRequest) {
         todayPaymentsAmount: round2(Number(todayPayments._sum.amount ?? 0))
       };
 
+      // Treasury = tuition + book income - deductions ("خصم مبلغ"). Same maths as the treasury page.
+      response.treasury = await treasurySummary(
+        { organizationId: ctx.organizationId, branchIds },
+        today.getUTCFullYear(),
+        today.getUTCMonth() + 1
+      );
+
       const trendStart = new Date(
         Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - (query.trendMonths - 1), 1)
       );
@@ -213,6 +234,7 @@ export async function GET(request: NextRequest) {
           organizationId: ctx.organizationId,
           deletedAt: null,
           date: { gte: new Date() },
+          ...ownGroup,
           ...(branchFilter ? { branchId: branchFilter } : {})
         },
         orderBy: { date: "asc" },

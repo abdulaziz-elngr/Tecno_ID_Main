@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { apiDelete, apiPatch, apiPost, useApi } from "@/lib/client";
+import { printStickers } from "@/lib/print-stickers";
 import { Badge, ConfirmDialog, ErrorNotice, Field, Modal, PageHeader, useToast } from "@/components/ui";
 
 interface StudentRow {
@@ -29,6 +30,7 @@ interface GroupDetail {
   subject: { id: string; name: string; code: string | null } | null;
   teacher: { id: string; fullName: string } | null;
   assistant: { id: string; fullName: string } | null;
+  assistants?: { id: string; fullName: string }[];
   schedules: { id: string; dayOfWeek: string; startMinutes: number; endMinutes: number; isActive: boolean }[];
   currentCount: number;
   remaining: number;
@@ -76,6 +78,7 @@ export default function GroupDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filteredStudents = useMemo(() => {
     let rows = group?.students ?? [];
@@ -97,6 +100,35 @@ export default function GroupDetailPage() {
     });
     return rows;
   }, [group, search, statusFilter, sortKey]);
+
+  // "Select all" applies to the students currently shown (after search/filter).
+  const allVisibleSelected = filteredStudents.length > 0 && filteredStudents.every((s) => selected.has(s.id));
+  const someVisibleSelected = filteredStudents.some((s) => selected.has(s.id));
+  const selectedStudents = (group?.students ?? []).filter((s) => selected.has(s.id));
+
+  function toggleStudent(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) filteredStudents.forEach((s) => next.delete(s.id));
+      else filteredStudents.forEach((s) => next.add(s.id));
+      return next;
+    });
+  }
+
+  function printSelectedBarcodes() {
+    // Keep the on-screen order (search/sort) for the printed stickers.
+    const rows = filteredStudents.filter((s) => selected.has(s.id));
+    printStickers(rows.map((s) => ({ name: s.fullName, code: s.studentCode })));
+  }
 
   async function addSchedule(event: FormEvent) {
     event.preventDefault();
@@ -282,10 +314,16 @@ export default function GroupDetailPage() {
         <div className="card p-4">
           <p className="text-xs text-black/50 dark:text-white/50">{t("groups.teacher")}</p>
           <p className="font-medium">{group.teacher?.fullName ?? "—"}</p>
-          {group.assistant && (
+          {(group.assistants?.length ?? 0) > 0 ? (
             <p className="mt-1 text-xs text-black/60 dark:text-white/60">
-              {t("groups.assistant")}: {group.assistant.fullName}
+              {t("groups.assistant")}: {group.assistants!.map((a) => a.fullName).join("، ")}
             </p>
+          ) : (
+            group.assistant && (
+              <p className="mt-1 text-xs text-black/60 dark:text-white/60">
+                {t("groups.assistant")}: {group.assistant.fullName}
+              </p>
+            )
           )}
         </div>
         <div className="card p-4">
@@ -343,10 +381,19 @@ export default function GroupDetailPage() {
             <option value="enrolled">Sort: Enrollment date</option>
           </select>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Link href={`/dashboard/students?groupId=${group.id}`} className="btn-primary">
             {t("students.add")}
           </Link>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={printSelectedBarcodes}
+            disabled={selectedStudents.length === 0}
+          >
+            {t("groups.printBarcodes")}
+            {selectedStudents.length > 0 ? ` (${selectedStudents.length} ${t("groups.selectedCount")})` : ""}
+          </button>
           <button type="button" className="btn-secondary" onClick={exportXlsx}>
             Export
           </button>
@@ -357,23 +404,45 @@ export default function GroupDetailPage() {
         <table className="w-full min-w-[640px] text-start text-sm">
           <thead className="border-b border-black/5 text-black/60 dark:border-white/10 dark:text-white/60">
             <tr>
+              <th className="w-10 p-3 text-start">
+                <input
+                  type="checkbox"
+                  aria-label={t("groups.selectAll")}
+                  title={t("groups.selectAll")}
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected;
+                  }}
+                  onChange={toggleAllVisible}
+                  disabled={filteredStudents.length === 0}
+                />
+              </th>
               <th className="p-3 text-start">{t("students.id")}</th>
               <th className="p-3 text-start">{t("students.title")}</th>
               <th className="p-3 text-start">Phone</th>
               <th className="p-3 text-start">Parent</th>
               <th className="p-3 text-start">{t("common.status")}</th>
+              <th className="p-3 text-start">{t("groups.printBarcodes")}</th>
             </tr>
           </thead>
           <tbody>
             {filteredStudents.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-6 text-center text-black/50 dark:text-white/50">
+                <td colSpan={7} className="p-6 text-center text-black/50 dark:text-white/50">
                   {t("groups.rosterEmpty")}
                 </td>
               </tr>
             )}
             {filteredStudents.map((s) => (
               <tr key={s.id} className="border-b border-black/5 dark:border-white/5">
+                <td className="p-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`${t("groups.selectStudent")}: ${s.fullName}`}
+                    checked={selected.has(s.id)}
+                    onChange={() => toggleStudent(s.id)}
+                  />
+                </td>
                 <td className="p-3 font-mono text-xs">
                   <Link href={`/dashboard/students/${s.id}`} className="hover:underline">
                     {s.studentCode}
@@ -390,6 +459,17 @@ export default function GroupDetailPage() {
                 </td>
                 <td className="p-3">
                   <Badge tone={s.status === "ACTIVE" ? "success" : "neutral"}>{s.status}</Badge>
+                </td>
+                <td className="p-3">
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-1 text-xs"
+                    onClick={() => printStickers([{ name: s.fullName, code: s.studentCode }])}
+                    aria-label={`${t("groups.printBarcodes")}: ${s.fullName}`}
+                    title={t("groups.printBarcodes")}
+                  >
+                    {t("common.print")}
+                  </button>
                 </td>
               </tr>
             ))}

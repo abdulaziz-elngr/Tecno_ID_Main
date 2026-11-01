@@ -14,11 +14,17 @@ export interface PaymentWarning {
  * past the due day) are still listed so the operator sees the whole picture;
  * each entry carries its status.
  */
-export async function paymentWarningFor(organizationId: string, studentId: string): Promise<PaymentWarning | null> {
-  const student = await db.student.findFirst({
-    where: { id: studentId, organizationId, deletedAt: null },
-    select: { id: true, gradeId: true, enrollmentDate: true }
-  });
+export async function paymentWarningFor(
+  organizationId: string,
+  studentId: string,
+  loaded?: { id: string; gradeId: string; enrollmentDate: Date }
+): Promise<PaymentWarning | null> {
+  const student =
+    loaded ??
+    (await db.student.findFirst({
+      where: { id: studentId, organizationId, deletedAt: null },
+      select: { id: true, gradeId: true, enrollmentDate: true }
+    }));
   if (!student) return null;
   const env = await loadLedgerEnv(organizationId);
   const ledger = (await loadLedgers(organizationId, [student], env)).get(student.id) ?? [];

@@ -28,6 +28,7 @@ interface SubjectDetail {
     stage: { id: string; name: string };
     teacher: { id: string; fullName: string } | null;
     assistant: { id: string; fullName: string } | null;
+    assistants?: { id: string; fullName: string }[];
     schedules: { id: string; dayOfWeek: string; startMinutes: number; endMinutes: number }[];
     studentCount: number;
     remaining: number;
@@ -170,7 +171,7 @@ export default function SubjectDetailPage() {
                 </Link>
               </td>
               <td className="p-3">{g.teacher?.fullName ?? "—"}</td>
-              <td className="p-3">{g.assistant?.fullName ?? "—"}</td>
+              <td className="p-3">{(g.assistants?.length ? g.assistants.map((a) => a.fullName).join("، ") : g.assistant?.fullName) ?? "—"}</td>
               <td className="p-3">
                 {g.studentCount} / {g.capacity}
                 <span className="block text-xs text-black/50 dark:text-white/50">

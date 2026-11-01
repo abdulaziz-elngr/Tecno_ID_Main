@@ -4,6 +4,9 @@ import { handleApiError, ok, readQuery } from "@/lib/api";
 import { loadRoster } from "@/lib/payment-roster";
 import { recordsQuerySchema } from "@/lib/payment-schemas";
 
+/** These routes build a ledger for every student; give them room on serverless. */
+export const maxDuration = 30;
+
 /** Paid / not-paid split for a month. Read-only; data comes from the same ledger the payment API enforces. */
 export async function GET(request: NextRequest) {
   try {

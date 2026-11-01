@@ -57,6 +57,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
           },
           teacher: { select: { id: true, fullName: true } },
           assistant: { select: { id: true, fullName: true } },
+          assistants: { orderBy: { createdAt: "asc" }, select: { teacher: { select: { id: true, fullName: true } } } },
           schedules: {
             where: { isActive: true },
             orderBy: [{ dayOfWeek: "asc" }, { startMinutes: "asc" }],
@@ -127,6 +128,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         stage: { id: g.grade.stage.id, name: g.grade.stage.name },
         teacher: g.teacher,
         assistant: g.assistant,
+        assistants: g.assistants.map((a) => a.teacher),
         schedules: g.schedules,
         studentCount: g._count.students,
         remaining: Math.max(0, g.capacity - g._count.students)

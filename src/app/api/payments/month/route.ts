@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
           // Serialise all payments of this student.
           await tx.$queryRaw`SELECT "id" FROM "Student" WHERE "id" = ${student!.id} FOR UPDATE`;
 
-          const ledger = (await loadLedgers(ctx.organizationId, [student!], env, tx)).get(student!.id) ?? [];
+          const ledger = (await loadLedgers(ctx.organizationId, [student!], env, tx, { includeFuture: true })).get(student!.id) ?? [];
           const check = checkPayable(ledger, target);
           if (!check.ok) {
             if (check.reason === "OUT_OF_ORDER" && check.oldest) {
@@ -85,6 +85,12 @@ export async function POST(request: NextRequest) {
                 status: 409,
                 code: "OUT_OF_ORDER",
                 details: { oldest: serializeEntry(check.oldest) }
+              });
+            }
+            if (check.reason === "EXEMPT") {
+              throw new BusinessRuleError("This student is exempt from monthly fees for this month. No payment is due.", {
+                status: 409,
+                code: "FEE_EXEMPT"
               });
             }
             if (check.reason === "ALREADY_PAID") {
@@ -200,7 +206,7 @@ export async function POST(request: NextRequest) {
             }
           });
 
-          const after = (await loadLedgers(ctx.organizationId, [student!], env, tx)).get(student!.id) ?? [];
+          const after = (await loadLedgers(ctx.organizationId, [student!], env, tx, { includeFuture: true })).get(student!.id) ?? [];
           return { payment, invoice, amount, rows, after, discount: input.discount ?? 0 };
         },
         { timeout: 15_000 }
@@ -218,6 +224,7 @@ export async function POST(request: NextRequest) {
       entityId: result.payment.id,
       afterValue: {
         month: `${target.year}-${String(target.month).padStart(2, "0")}`,
+        advance: Boolean(entry?.future),
         amount: result.amount,
         discount: result.discount,
         method: input.method,
@@ -240,6 +247,7 @@ export async function POST(request: NextRequest) {
       receiptNumber: result.payment.receiptNumber,
       invoiceNumber: result.invoice.invoiceNumber,
       amount: result.amount,
+      advance: Boolean(entry?.future),
       monthStatus: entry?.status ?? null,
       monthRemaining: entry?.remaining ?? 0,
       nextEligible: sum.oldest ? serializeEntry(sum.oldest) : null,

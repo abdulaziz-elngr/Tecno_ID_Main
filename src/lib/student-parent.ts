@@ -13,8 +13,7 @@ import { normalizeWhatsAppNumber, phoneLookupVariants, toLocalPhone } from "./wa
  * WhatsApp chat URL is NEVER stored — only the number — and is built where
  * it is needed with `buildWhatsAppLink()` (src/lib/wa-link.ts).
  *
- * The parent's WhatsApp number is REQUIRED whenever a student is created.
- * It is stored as international digits (201012345678) so every existing
+ * The parent's WhatsApp number is OPTIONAL. When given it is stored as international digits (201012345678) so every existing
  * `buildWhatsAppLink(parent.whatsappNumber || parent.phone)` call yields a
  * valid wa.me link no matter how the number was typed.
  */
@@ -68,8 +67,8 @@ export interface GuardianInput {
   fullName?: string;
   /** Guardian's phone as typed; defaults to the WhatsApp number when omitted. */
   phone?: string;
-  /** Already normalized (see toStoredWhatsappNumber). */
-  whatsappNumber: string;
+  /** Already normalized (see toStoredWhatsappNumber). Optional. */
+  whatsappNumber?: string;
 }
 
 /**
@@ -79,7 +78,9 @@ export interface GuardianInput {
  */
 export async function upsertGuardian(client: Client, organizationId: string, input: GuardianInput) {
   const typedPhone = input.phone?.trim() || undefined;
-  const variants = phoneLookupVariants(typedPhone ?? input.whatsappNumber);
+  const contact = typedPhone ?? input.whatsappNumber;
+  if (!contact) throw new GuardianInputError("Guardian phone or WhatsApp number is required.");
+  const variants = phoneLookupVariants(contact);
 
   let existing =
     variants.length > 0
@@ -95,7 +96,7 @@ export async function upsertGuardian(client: Client, organizationId: string, inp
     });
   }
 
-  const phone = existing?.phone ?? typedPhone ?? toLocalPhone(input.whatsappNumber);
+  const phone = existing?.phone ?? typedPhone ?? toLocalPhone(input.whatsappNumber as string);
 
   return upsertParentForOrg(client, organizationId, {
     phone,
@@ -128,14 +129,13 @@ interface GuardianSnapshot {
  *  - guardian shared with another organization -> never rewritten (see
  *    scope.ts); asking for a different value is reported instead of silently
  *    ignored;
- *  - the guardian must end up with a WhatsApp number.
  */
 export async function applyGuardianUpdate(
   tx: Prisma.TransactionClient,
   organizationId: string,
   studentId: string,
   input: GuardianUpdateInput
-): Promise<{ before: GuardianSnapshot | null; after: GuardianSnapshot }> {
+): Promise<{ before: GuardianSnapshot | null; after: GuardianSnapshot | null }> {
   const link = await tx.studentParent.findFirst({
     where: { studentId },
     orderBy: { isPrimary: "desc" },
@@ -143,7 +143,10 @@ export async function applyGuardianUpdate(
   });
 
   if (!link) {
-    if (!input.whatsappNumber) throw new GuardianInputError(WHATSAPP_REQUIRED_MESSAGE);
+    // No guardian yet and no contact given: nothing to link (the guardian is optional).
+    if (!input.whatsappNumber && !input.phone) {
+      return { before: null, after: null };
+    }
     const parent = await upsertGuardian(tx, organizationId, {
       fullName: input.fullName,
       phone: input.phone,
@@ -159,9 +162,6 @@ export async function applyGuardianUpdate(
 
   const current = link.parent;
   const before = snapshot(current);
-  if (!input.whatsappNumber && !current.whatsappNumber) {
-    throw new GuardianInputError(WHATSAPP_REQUIRED_MESSAGE);
-  }
 
   const nameChanged = input.fullName !== undefined && input.fullName !== current.fullName;
   const whatsappChanged = input.whatsappNumber !== undefined && input.whatsappNumber !== current.whatsappNumber;

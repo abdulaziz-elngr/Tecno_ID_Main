@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
+import { assertGroupInScope, groupIdFilter, resolveOwnGroupIds } from "@/lib/group-access";
 import { handleApiError, ok, created, readJson, readQuery, paginationSchema, BusinessRuleError } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
 import { toDateOnly } from "@/lib/sessions";
@@ -36,13 +37,14 @@ export async function GET(request: NextRequest) {
     const ctx = await requirePermission("attendance.view");
     const query = readQuery(request, listSchema);
     const branchIds = resolveBranchScope(ctx, query.branchId);
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
 
     const where = {
       organizationId: ctx.organizationId,
       deletedAt: null,
       ...(branchIds ? { branchId: { in: branchIds } } : {}),
       ...(query.studentId ? { studentId: query.studentId } : {}),
-      ...(query.groupId ? { groupId: query.groupId } : {}),
+      ...groupIdFilter(ownGroupIds, query.groupId),
       ...(query.sessionId ? { sessionId: query.sessionId } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.gradeId ? { group: { gradeId: query.gradeId } } : {}),
@@ -154,6 +156,7 @@ export async function POST(request: NextRequest) {
       include: { group: { select: { id: true, name: true } } }
     });
     if (!session) throw new BusinessRuleError("Session not found.", { status: 404 });
+    assertGroupInScope(await resolveOwnGroupIds(ctx), session.groupId);
     if (session.status === "CANCELLED") {
       throw new BusinessRuleError("This session has been cancelled.");
     }

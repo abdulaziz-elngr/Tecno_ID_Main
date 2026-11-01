@@ -132,7 +132,7 @@ function RecitationBoard({ id, onBack }: { id: string; onBack: () => void }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-3" aria-live="polite">
+      <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3" aria-live="polite">
         <StatCard label={t("ex.totalStudents")} value={counts.total} />
         <StatCard label={t("ex.graded")} value={counts.graded} tone="positive" />
         <StatCard label={t("rc.pending")} value={counts.pending} tone={counts.pending > 0 ? "warning" : "default"} />

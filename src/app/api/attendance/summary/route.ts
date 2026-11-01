@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { groupIdFilter, resolveOwnGroupIds } from "@/lib/group-access";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
 import { handleApiError, ok, readQuery } from "@/lib/api";
 import { toDateOnly } from "@/lib/sessions";
@@ -48,10 +49,12 @@ export async function GET(request: NextRequest) {
         : {})
     };
 
+    const ownGroupIds = await resolveOwnGroupIds(ctx);
     const where = {
       organizationId: ctx.organizationId,
       deletedAt: null,
       ...(branchIds ? { branchId: { in: branchIds } } : {}),
+      ...groupIdFilter(ownGroupIds),
       session: sessionFilter
     };
 

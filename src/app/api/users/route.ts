@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
@@ -31,7 +32,9 @@ const createSchema = z
     password: z.string().min(10).max(200),
     roleIds: z.array(z.string().uuid()).min(1).max(10),
     branchIds: z.array(z.string().uuid()).max(50).default([]),
-    isActive: z.boolean().default(true)
+    isActive: z.boolean().default(true),
+    /** Teacher / Teaching-Assistant profile this login belongs to (limits it to that profile's groups). */
+    teacherId: z.string().uuid().nullable().optional()
   })
   .refine((v) => v.email || v.phone, { message: "Either an email or a phone number is required." });
 
@@ -47,8 +50,35 @@ const SAFE_SELECT = {
   lockedUntil: true,
   createdAt: true,
   userRoles: { select: { role: { select: { id: true, name: true } } } },
-  userBranches: { select: { branch: { select: { id: true, name: true } } } }
+  userBranches: { select: { branch: { select: { id: true, name: true } } } },
+  teacherProfile: { select: { id: true, fullName: true, isAssistant: true } }
 } as const;
+
+
+/**
+ * Links (or unlinks) a login to a Teacher / Teaching-Assistant profile. That link
+ * is what limits a teaching login to the groups of that profile.
+ * Run inside the transaction that creates/updates the user.
+ */
+async function applyTeacherLink(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  userId: string,
+  teacherId: string | null | undefined
+) {
+  if (teacherId === undefined) return;
+  // Free whatever profile this login currently holds.
+  await tx.teacher.updateMany({ where: { userId, organizationId }, data: { userId: null } });
+  if (teacherId === null) return;
+  const teacher = await tx.teacher.findFirst({
+    where: { id: teacherId, organizationId, deletedAt: null }
+  });
+  if (!teacher) throw new BusinessRuleError("The selected teacher profile was not found.");
+  if (teacher.userId && teacher.userId !== userId) {
+    throw new BusinessRuleError("This teacher profile is already linked to another login.", { status: 409 });
+  }
+  await tx.teacher.update({ where: { id: teacher.id }, data: { userId } });
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -128,18 +158,22 @@ export async function POST(request: NextRequest) {
 
     const passwordHash = await hashPassword(input.password);
 
-    const user = await db.user.create({
-      data: {
-        organizationId: ctx.organizationId,
-        fullName: input.fullName,
-        email: input.email,
-        phone: input.phone,
-        passwordHash,
-        isActive: input.isActive,
-        userRoles: { create: input.roleIds.map((roleId) => ({ roleId })) },
-        userBranches: { create: input.branchIds.map((branchId) => ({ branchId })) }
-      },
-      select: SAFE_SELECT
+    const user = await db.$transaction(async (tx) => {
+      const row = await tx.user.create({
+        data: {
+          organizationId: ctx.organizationId,
+          fullName: input.fullName,
+          email: input.email,
+          phone: input.phone,
+          passwordHash,
+          isActive: input.isActive,
+          userRoles: { create: input.roleIds.map((roleId) => ({ roleId })) },
+          userBranches: { create: input.branchIds.map((branchId) => ({ branchId })) }
+        },
+        select: { id: true }
+      });
+      await applyTeacherLink(tx, ctx.organizationId, row.id, input.teacherId);
+      return tx.user.findUniqueOrThrow({ where: { id: row.id }, select: SAFE_SELECT });
     });
 
     await writeAuditLog({

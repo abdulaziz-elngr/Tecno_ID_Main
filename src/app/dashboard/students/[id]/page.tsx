@@ -4,10 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
-import { formatDate, formatDateTime, formatMoneyClient, useApi } from "@/lib/client";
-import { Badge, ErrorNotice, PageHeader, StatCard } from "@/components/ui";
+import { apiDelete, apiPost, formatDate, formatDateTime, formatMoneyClient, useApi } from "@/lib/client";
+import { StudentBooksCard } from "@/components/books/StudentBooksCard";
+import { Badge, ConfirmDialog, ErrorNotice, Field, Modal, StatCard, useToast } from "@/components/ui";
 
 interface ProfileData {
+  /** True when the caller may grant/remove the monthly-fee exemption (payments.update). */
+  canManageFeeExemption?: boolean;
   student: {
     id: string;
     studentCode: string;
@@ -20,6 +23,10 @@ interface ProfileData {
     address: string | null;
     school: string | null;
     status: string;
+    /** Only sent to roles that can see finance. */
+    feeExempt?: boolean;
+    feeExemptFrom?: string | null;
+    feeExemptReason?: string | null;
     enrollmentDate: string;
     notes: string | null;
     emergencyContact: string | null;
@@ -113,8 +120,53 @@ export default function StudentProfilePage() {
   const { t } = useI18n();
   const router = useRouter();
   const params = useParams<{ id: string }>();
-  const { data, loading, error } = useApi<ProfileData>(`/api/students/${params.id}/profile`);
+  const toast = useToast();
+  const { data, loading, error, reload } = useApi<ProfileData>(`/api/students/${params.id}/profile`);
   const [tab, setTab] = useState<Tab>("overview");
+
+  // Monthly-fee exemption dialogs.
+  const [exemptOpen, setExemptOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [exemptReason, setExemptReason] = useState("");
+  const [includePast, setIncludePast] = useState(false);
+  const [exemptBusy, setExemptBusy] = useState(false);
+  const [exemptError, setExemptError] = useState<string | null>(null);
+
+  function openExempt() {
+    setExemptReason("");
+    setIncludePast(false);
+    setExemptError(null);
+    setExemptOpen(true);
+  }
+
+  async function grantExemption() {
+    setExemptBusy(true);
+    setExemptError(null);
+    try {
+      await apiPost(`/api/students/${params.id}/fee-exempt`, { reason: exemptReason.trim(), includePast });
+      setExemptOpen(false);
+      toast.success(t("student.feeExempt.done"));
+      reload();
+    } catch (err) {
+      setExemptError(err instanceof Error ? err.message : "Failed.");
+    } finally {
+      setExemptBusy(false);
+    }
+  }
+
+  async function removeExemption(reason: string) {
+    setExemptBusy(true);
+    try {
+      await apiDelete(`/api/students/${params.id}/fee-exempt`, { reason });
+      setRemoveOpen(false);
+      toast.success(t("student.feeExempt.removed"));
+      reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed.");
+    } finally {
+      setExemptBusy(false);
+    }
+  }
 
   if (error) return <ErrorNotice message={error} />;
   if (loading || !data) {
@@ -122,6 +174,8 @@ export default function StudentProfilePage() {
   }
 
   const { student, parents, attendance, academics, finance, timeline } = data;
+  const canManageExemption = Boolean(data.canManageFeeExemption);
+  const feeExempt = Boolean(student.feeExempt);
   const primaryParent = parents.find((p) => p.isPrimary) ?? parents[0];
 
   return (
@@ -130,7 +184,17 @@ export default function StudentProfilePage() {
         <button onClick={() => router.back()} className="text-sm text-tecno-gold-dark dark:text-tecno-gold">
           ← {t("common.back")}
         </button>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {canManageExemption &&
+            (feeExempt ? (
+              <button type="button" className="btn-secondary" onClick={() => setRemoveOpen(true)}>
+                {t("student.feeExempt.remove")}
+              </button>
+            ) : (
+              <button type="button" className="btn-primary" onClick={openExempt}>
+                {t("student.feeExempt.button")}
+              </button>
+            ))}
           <Link href={`/dashboard/students/${student.id}/card`} className="btn-secondary">
             {t("students.card")}
           </Link>
@@ -153,8 +217,22 @@ export default function StudentProfilePage() {
             {[student.stage?.name, student.grade?.name, student.group?.name].filter(Boolean).join(" · ")}
           </p>
         </div>
-        <Badge tone={student.status === "ACTIVE" ? "success" : "neutral"}>{student.status}</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          {feeExempt && <Badge tone="brand">{t("student.feeExempt.badge")}</Badge>}
+          <Badge tone={student.status === "ACTIVE" ? "success" : "neutral"}>{student.status}</Badge>
+        </div>
       </div>
+
+      {feeExempt && (
+        <div className="rounded-card border border-tecno-gold/40 bg-tecno-gold/10 p-3 text-sm">
+          <p className="font-medium">{t("student.feeExempt.badge")}</p>
+          <p className="mt-0.5 text-black/65 dark:text-white/65">
+            {t("student.feeExempt.since")}:{" "}
+            {student.feeExemptFrom ? formatDate(student.feeExemptFrom) : t("student.feeExempt.allMonths")}
+            {student.feeExemptReason ? ` · ${student.feeExemptReason}` : ""}
+          </p>
+        </div>
+      )}
 
       <div className="no-scrollbar flex gap-1 overflow-x-auto border-b border-black/10 dark:border-white/10">
         {TABS.map((key) => (
@@ -305,7 +383,7 @@ export default function StudentProfilePage() {
                           <td className="p-3">{formatMoneyClient(s.paidAmount)}</td>
                           <td className="p-3">{formatMoneyClient(s.remaining)}</td>
                           <td className="p-3">
-                            <Badge tone={s.status === "PAID" ? "success" : "warning"}>{s.status}</Badge>
+                            <Badge tone={s.status === "PAID" ? "success" : s.status === "WAIVED" ? "brand" : "warning"}>{s.status}</Badge>
                           </td>
                         </tr>
                       ))}
@@ -346,6 +424,7 @@ export default function StudentProfilePage() {
               </div>
             </>
           )}
+          <StudentBooksCard studentId={params.id} />
         </div>
       )}
 
@@ -525,6 +604,62 @@ export default function StudentProfilePage() {
           </ul>
         </div>
       )}
+      <Modal
+        open={exemptOpen}
+        title={t("student.feeExempt.title")}
+        onClose={() => !exemptBusy && setExemptOpen(false)}
+        footer={
+          <>
+            <button type="button" className="btn-secondary" disabled={exemptBusy} onClick={() => setExemptOpen(false)}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={exemptBusy || exemptReason.trim().length < 3}
+              onClick={grantExemption}
+            >
+              {exemptBusy ? t("common.loading") : t("student.feeExempt.confirm")}
+            </button>
+          </>
+        }
+      >
+        <ErrorNotice message={exemptError} />
+        <p className="text-sm text-black/70 dark:text-white/70">{t("student.feeExempt.info")}</p>
+        <Field label={t("student.feeExempt.reason")} required>
+          {(id) => (
+            <textarea
+              id={id}
+              className="input min-h-[80px]"
+              value={exemptReason}
+              onChange={(e) => setExemptReason(e.target.value)}
+            />
+          )}
+        </Field>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={includePast}
+            onChange={(e) => setIncludePast(e.target.checked)}
+          />
+          <span>
+            <span className="font-medium">{t("student.feeExempt.includePast")}</span>
+            <span className="block text-xs text-black/55 dark:text-white/55">{t("student.feeExempt.includePastHint")}</span>
+          </span>
+        </label>
+      </Modal>
+
+      <ConfirmDialog
+        open={removeOpen}
+        title={t("student.feeExempt.removeTitle")}
+        message={t("student.feeExempt.removeMessage")}
+        confirmLabel={t("student.feeExempt.confirmRemove")}
+        requireReason
+        busy={exemptBusy}
+        onCancel={() => setRemoveOpen(false)}
+        onConfirm={removeExemption}
+      />
     </div>
   );
 }

@@ -4,9 +4,10 @@ import { db } from "@/lib/db";
 import { requirePermission, resolveBranchScope } from "@/lib/rbac";
 import { handleApiError, ok, readJson } from "@/lib/api";
 import { writeAuditLog } from "@/lib/audit";
-import { getPaymentRules } from "@/lib/settings";
+import { getCenterProfile, getPaymentRules } from "@/lib/settings";
 import { computeSubscriptionStatus } from "@/lib/billing";
-import { feeForMonth } from "@/lib/subscription-months";
+import { feeForMonth, inExemption } from "@/lib/subscription-months";
+import { exemptionWindowOf } from "@/lib/payment-ledger";
 
 const schema = z.object({
   periodYear: z.number().int().min(2000).max(2100),
@@ -48,9 +49,18 @@ export async function POST(request: NextRequest) {
         ...(input.gradeId ? { gradeId: input.gradeId } : {}),
         group: { isActive: true, deletedAt: null, ...(branchIds ? { branchId: { in: branchIds } } : {}) }
       },
-      select: { id: true, groupId: true, branchId: true, gradeId: true },
+      select: {
+        id: true,
+        groupId: true,
+        branchId: true,
+        gradeId: true,
+        feeExempt: true,
+        feeExemptFrom: true,
+        feeExemptUntil: true
+      },
       take: 5000
     });
+    const timeZone = (await getCenterProfile(ctx.organizationId)).timezone || "Africa/Cairo";
 
     const existing = await db.subscription.findMany({
       where: {
@@ -78,9 +88,15 @@ export async function POST(request: NextRequest) {
     const period = { year: input.periodYear, month: input.periodMonth };
 
     let noPrice = 0;
+    let exempt = 0;
     const toCreate = [];
     for (const e of enrollments) {
       if (existingKeys.has(`${e.id}:${e.groupId}`)) continue;
+      // Exempt students are never charged for months inside their exemption.
+      if (inExemption(exemptionWindowOf(e, timeZone), period)) {
+        exempt++;
+        continue;
+      }
       const amount = input.amount ?? feeForMonth(feesByGrade.get(e.gradeId) ?? [], period);
       if (amount === null || amount === undefined || amount <= 0) {
         noPrice++;
@@ -110,16 +126,18 @@ export async function POST(request: NextRequest) {
       entityType: "Subscription",
       afterValue: {
         created: result.count,
-        skipped: enrollments.length - toCreate.length - noPrice,
+        skipped: enrollments.length - toCreate.length - noPrice - exempt,
         noPrice,
+        exempt,
         period: `${input.periodYear}-${String(input.periodMonth).padStart(2, "0")}`
       }
     });
 
     return ok({
       created: result.count,
-      skipped: enrollments.length - toCreate.length - noPrice,
+      skipped: enrollments.length - toCreate.length - noPrice - exempt,
       noPrice,
+      exempt,
       considered: enrollments.length
     });
   } catch (err) {

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { usePermissions } from "@/components/PermissionsProvider";
 
 /**
  * Main navigation (spec §54).
@@ -30,7 +31,6 @@ const SECTIONS: NavSection[] = [
     key: "nav.group.people",
     items: [
       { href: "/dashboard/students", key: "nav.students" },
-      { href: "/dashboard/parents", key: "nav.parents" },
       { href: "/dashboard/teachers", key: "nav.teachers" },
       { href: "/dashboard/employees", key: "nav.employees" }
     ]
@@ -68,7 +68,9 @@ const SECTIONS: NavSection[] = [
       { href: "/dashboard/finance/subscriptions", key: "nav.subscriptions" },
       { href: "/dashboard/finance/payments", key: "nav.payments" },
       { href: "/dashboard/finance/records", key: "nav.paymentRecords" },
-      { href: "/dashboard/finance/invoices", key: "nav.invoices" }
+      { href: "/dashboard/finance/invoices", key: "nav.invoices" },
+      { href: "/dashboard/finance/books", key: "nav.books" },
+      { href: "/dashboard/finance/deductions", key: "nav.deductions" }
     ]
   },
   {
@@ -119,11 +121,16 @@ function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void 
 
 function NavContent({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n();
+  const { loaded, canOpen } = usePermissions();
+  // Until the permissions arrive only the dashboard is shown (no flash of forbidden pages).
+  const visible = (item: NavItem) => loaded && canOpen(item.href);
+  const sections = SECTIONS.map((s) => ({ ...s, items: s.items.filter(visible) })).filter((s) => s.items.length > 0);
+  const bottom = BOTTOM.filter(visible);
   return (
     <nav className="flex-1 space-y-4 overflow-y-auto overscroll-contain p-3" aria-label="Main navigation">
       <NavLink item={TOP} onNavigate={onNavigate} />
 
-      {SECTIONS.map((section) => (
+      {sections.map((section) => (
         <div key={section.key}>
           <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-black/40 dark:text-white/40">
             {t(section.key)}
@@ -136,11 +143,13 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       ))}
 
-      <div className="space-y-0.5 border-t border-black/5 pt-3 dark:border-white/10">
-        {BOTTOM.map((item) => (
-          <NavLink key={item.href} item={item} onNavigate={onNavigate} />
-        ))}
-      </div>
+      {bottom.length > 0 && (
+        <div className="space-y-0.5 border-t border-black/5 pt-3 dark:border-white/10">
+          {bottom.map((item) => (
+            <NavLink key={item.href} item={item} onNavigate={onNavigate} />
+          ))}
+        </div>
+      )}
     </nav>
   );
 }

@@ -1,7 +1,8 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac";
+import { clearAuthContextCache, requirePermission } from "@/lib/rbac";
 import { writeAuditLog } from "@/lib/audit";
 import { assertCanAssign, assertCanManageUser } from "@/lib/scope";
 import { hashPassword, isPasswordStrongEnough } from "@/lib/password";
@@ -19,6 +20,8 @@ const updateSchema = z.object({
   branchIds: z.array(z.string().uuid()).max(50).optional(),
   newPassword: z.string().min(10).max(200).optional(),
   unlock: z.boolean().optional(),
+  /** Link / unlink (null) the Teacher or Teaching-Assistant profile of this login. */
+  teacherId: z.string().uuid().nullable().optional(),
   reason: z.string().trim().min(3).max(500)
 });
 
@@ -33,8 +36,35 @@ const SAFE_SELECT = {
   lockedUntil: true,
   createdAt: true,
   userRoles: { select: { role: { select: { id: true, name: true } } } },
-  userBranches: { select: { branch: { select: { id: true, name: true } } } }
+  userBranches: { select: { branch: { select: { id: true, name: true } } } },
+  teacherProfile: { select: { id: true, fullName: true, isAssistant: true } }
 } as const;
+
+
+/**
+ * Links (or unlinks) a login to a Teacher / Teaching-Assistant profile. That link
+ * is what limits a teaching login to the groups of that profile.
+ * Run inside the transaction that creates/updates the user.
+ */
+async function applyTeacherLink(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  userId: string,
+  teacherId: string | null | undefined
+) {
+  if (teacherId === undefined) return;
+  // Free whatever profile this login currently holds.
+  await tx.teacher.updateMany({ where: { userId, organizationId }, data: { userId: null } });
+  if (teacherId === null) return;
+  const teacher = await tx.teacher.findFirst({
+    where: { id: teacherId, organizationId, deletedAt: null }
+  });
+  if (!teacher) throw new BusinessRuleError("The selected teacher profile was not found.");
+  if (teacher.userId && teacher.userId !== userId) {
+    throw new BusinessRuleError("This teacher profile is already linked to another login.", { status: 409 });
+  }
+  await tx.teacher.update({ where: { id: teacher.id }, data: { userId } });
+}
 
 async function loadUser(organizationId: string, id: string) {
   const user = await db.user.findFirst({
@@ -105,6 +135,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
 
     await db.$transaction(async (tx) => {
+      await applyTeacherLink(tx, ctx.organizationId, before.id, input.teacherId);
       if (input.roleIds) {
         await tx.userRole.deleteMany({ where: { userId: before.id } });
         await tx.userRole.createMany({
@@ -133,7 +164,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     });
 
     // Changing credentials, roles or activation invalidates every live session.
-    if (input.newPassword || input.roleIds || input.branchIds || input.isActive === false) {
+    if (input.newPassword || input.roleIds || input.branchIds || input.teacherId !== undefined || input.isActive === false) {
       await revokeAllSessionsForUser(before.id);
     }
 
@@ -159,6 +190,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       reason: input.reason
     });
 
+    clearAuthContextCache(); // permissions/roles/branches changed — drop the cached auth context
     return ok(after);
   } catch (err) {
     return handleApiError(SCOPE, err);
@@ -193,6 +225,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
       reason
     });
 
+    clearAuthContextCache(); // permissions/roles/branches changed — drop the cached auth context
     return ok({ id: user.id, deleted: true });
   } catch (err) {
     return handleApiError(SCOPE, err);

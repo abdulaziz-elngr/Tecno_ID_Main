@@ -328,6 +328,8 @@ model Group {
   subject   Subject? @relation(fields: [subjectId], references: [id])
   teacher   Teacher? @relation("GroupTeacher", fields: [teacherId], references: [id])
   assistant Teacher? @relation("GroupAssistant", fields: [assistantId], references: [id])
+  // ALL assistants of the group (many per group). `assistantId` above mirrors the first one.
+  assistants GroupAssistant[]
 
   students    Student[]
   schedules   Schedule[]
@@ -386,6 +388,21 @@ model Schedule {
 // distinguishes the two for UI/reporting; access control itself is
 // still driven by the linked User's Role (TEACHER vs TEACHER_ASSISTANT),
 // not by this flag — this flag is descriptive, not a security boundary.
+/// Many assistants per group. `Group.assistantId` is kept as a mirror of the first
+/// one (sessions / schedule conflicts still read it); this table is the source of truth.
+model GroupAssistant {
+  id        String   @id @default(uuid())
+  groupId   String
+  teacherId String
+  createdAt DateTime @default(now())
+
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, teacherId])
+  @@index([teacherId])
+}
+
 model Teacher {
   id             String   @id @default(uuid())
   organizationId String
@@ -405,6 +422,7 @@ model Teacher {
   user            User?   @relation(fields: [userId], references: [id])
   groupsAsTeacher   Group[] @relation("GroupTeacher")
   groupsAsAssistant Group[] @relation("GroupAssistant")
+  assistantLinks    GroupAssistant[]
   teacherSubjects   TeacherSubject[]
 
   @@index([organizationId])
@@ -441,6 +459,19 @@ model Student {
   status            StudentStatus @default(ACTIVE)
   notes             String?
   emergencyContact  String?
+
+  // Monthly-fee exemption. While `feeExempt` is true the student owes nothing
+  // from `feeExemptFrom` (null = from the very first month) onwards. Removing
+  // the exemption never rewrites history: `feeExempt` flips to false and
+  // `feeExemptUntil` records the last exempt month, so months already waived
+  // stay waived and billing resumes from the month of removal.
+  feeExempt         Boolean   @default(false)
+  feeExemptFrom     DateTime?
+  feeExemptUntil    DateTime?
+  feeExemptReason   String?
+  feeExemptAt       DateTime?
+  feeExemptById     String?
+
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   deletedAt         DateTime? // soft delete only — never hard-delete a student with history
@@ -461,11 +492,13 @@ model Student {
   payments              Payment[]
   invoices              Invoice[]
   recognitions          StudentRecognition[]
+  bookItems             BookReservationItem[]
 
   @@index([organizationId])
   @@index([branchId])
   @@index([studentCode])
   @@index([fullName])
+  @@index([organizationId, deletedAt])
   @@index([stageId])
   @@index([gradeId])
   @@index([groupId])
@@ -715,6 +748,8 @@ model Attendance {
   @@index([studentId])
   @@index([groupId])
   @@index([recordedAt])
+  @@index([studentId, deletedAt])
+  @@index([sessionId, deletedAt])
 }
 
 /// Immutable trail of every change made to an attendance record
@@ -1002,6 +1037,9 @@ model Subscription {
   paidAmount     Decimal            @default(0) @db.Decimal(10, 2)
   dueDate        DateTime
   status         SubscriptionStatus @default(UNPAID)
+  /// True when this row was set to WAIVED by a student fee exemption (so that
+  /// removing the exemption can restore exactly those rows and no others).
+  exemptWaived   Boolean            @default(false)
   notes          String?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
@@ -1017,6 +1055,7 @@ model Subscription {
   @@index([branchId])
   @@index([status])
   @@index([periodYear, periodMonth])
+  @@index([studentId])
 }
 
 enum PaymentMethod {
@@ -1364,4 +1403,158 @@ model FileAsset {
   createdAt      DateTime @default(now())
 
   @@index([organizationId])
+}
+
+
+// ==========================================================
+// TREASURY DEDUCTIONS (خصم مبلغ) + BOOK / NOTES RESERVATIONS (حجوزات الكتب والمذكرات)
+// Additive only. Script: prisma/sql/2026-10-deductions-books.sql
+// ==========================================================
+
+enum DeductionCategory {
+  EQUIPMENT
+  SUPPLIES
+  MAINTENANCE
+  CLEANING
+  UTILITIES
+  PRINTING
+  TRANSPORT
+  HOSPITALITY
+  OTHER
+}
+
+enum DeductionStatus {
+  ACTIVE
+  VOIDED
+}
+
+/// Money taken out of the center's treasury (something the center needed / management bought).
+/// Never deleted (same rule as payments): a mistake is VOIDED with a reason, which gives the
+/// amount back to the balance. Every total (dashboard, payment records, reports, treasury page)
+/// is computed from ACTIVE rows, so a deduction reduces them automatically — nothing to sync.
+model TreasuryDeduction {
+  id              String            @id @default(uuid())
+  organizationId  String
+  branchId        String
+  referenceNumber String            @unique
+  title           String
+  category        DeductionCategory @default(OTHER)
+  amount          Decimal           @db.Decimal(10, 2)
+  spentAt         DateTime          @default(now())
+  vendor          String?
+  requestedBy     String?
+  method          PaymentMethod     @default(CASH)
+  notes           String?
+  status          DeductionStatus   @default(ACTIVE)
+  recordedById    String?
+  voidedById      String?
+  voidedAt        DateTime?
+  voidReason      String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([spentAt])
+  @@index([status])
+}
+
+enum BookKind {
+  BOOK
+  NOTES
+}
+
+enum BookReservationStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+/// A book / notes reservation campaign for one group (e.g. "الكلمات" — الصف الثاني الثانوي — Group A).
+/// One BookReservationItem per student of the group carries that student's own money state.
+model BookReservation {
+  id             String                @id @default(uuid())
+  organizationId String
+  branchId       String
+  title          String
+  kind           BookKind              @default(BOOK)
+  stageId        String
+  gradeId        String
+  groupId        String
+  /// Full price of the book / notes.
+  bookPrice      Decimal               @db.Decimal(10, 2)
+  /// Minimum amount that secures the reservation (counts toward the price).
+  reservationFee Decimal               @default(0) @db.Decimal(10, 2)
+  dueDate        DateTime?
+  notes          String?
+  status         BookReservationStatus @default(OPEN)
+  createdById    String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  items BookReservationItem[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([groupId])
+  @@index([gradeId])
+  @@index([status])
+}
+
+enum BookItemStatus {
+  UNPAID
+  PARTIAL // paid something, but less than the reservation fee
+  RESERVED // reservation fee covered, book not fully paid
+  PAID
+}
+
+model BookReservationItem {
+  id            String         @id @default(uuid())
+  reservationId String
+  studentId     String
+  /// Copied from the reservation when the row is created, so a later price edit is an explicit action.
+  price         Decimal        @db.Decimal(10, 2)
+  discount      Decimal        @default(0) @db.Decimal(10, 2)
+  /// Derived cache, updated in the same transaction as every book payment.
+  paidAmount    Decimal        @default(0) @db.Decimal(10, 2)
+  status        BookItemStatus @default(UNPAID)
+  deliveredAt   DateTime?
+  notes         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  reservation BookReservation @relation(fields: [reservationId], references: [id])
+  student     Student         @relation(fields: [studentId], references: [id])
+  payments    BookPayment[]
+
+  @@unique([reservationId, studentId])
+  @@index([studentId])
+  @@index([status])
+}
+
+model BookPayment {
+  id             String        @id @default(uuid())
+  organizationId String
+  branchId       String
+  itemId         String
+  studentId      String
+  amount         Decimal       @db.Decimal(10, 2)
+  method         PaymentMethod @default(CASH)
+  receiptNumber  String        @unique
+  paidAt         DateTime      @default(now())
+  notes          String?
+  status         PaymentStatus @default(COMPLETED)
+  recordedById   String?
+  voidedById     String?
+  voidedAt       DateTime?
+  voidReason     String?
+  createdAt      DateTime      @default(now())
+
+  item BookReservationItem @relation(fields: [itemId], references: [id])
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([itemId])
+  @@index([studentId])
+  @@index([paidAt])
 }

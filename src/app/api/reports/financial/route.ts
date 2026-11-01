@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const to = new Date(`${query.to}T23:59:59.999Z`);
     const branchFilter = branchIds ? { in: branchIds } : undefined;
 
-    const [payments, billed] = await Promise.all([
+    const [payments, billed, waivedBilled, bookSum, deductionSum] = await Promise.all([
       db.payment.findMany({
         where: {
           organizationId: ctx.organizationId,
@@ -53,18 +53,53 @@ export async function GET(request: NextRequest) {
         where: {
           organizationId: ctx.organizationId,
           dueDate: { gte: from, lte: to },
+          status: { not: "WAIVED" },
           ...(branchFilter ? { branchId: branchFilter } : {})
         },
         _sum: { amount: true, discount: true, paidAmount: true }
+      }),
+      // Months waived by a student fee exemption are not billable: they must not
+      // inflate "billed"/"outstanding". Only money really collected on them counts.
+      db.subscription.aggregate({
+        where: {
+          organizationId: ctx.organizationId,
+          dueDate: { gte: from, lte: to },
+          status: "WAIVED",
+          ...(branchFilter ? { branchId: branchFilter } : {})
+        },
+        _sum: { paidAmount: true }
+      }),
+      // Book / notes income and treasury deductions ("خصم مبلغ") in the same period.
+      db.bookPayment.aggregate({
+        where: {
+          organizationId: ctx.organizationId,
+          status: "COMPLETED",
+          paidAt: { gte: from, lte: to },
+          ...(branchFilter ? { branchId: branchFilter } : {})
+        },
+        _sum: { amount: true }
+      }),
+      db.treasuryDeduction.aggregate({
+        where: {
+          organizationId: ctx.organizationId,
+          status: "ACTIVE",
+          spentAt: { gte: from, lte: to },
+          ...(branchFilter ? { branchId: branchFilter } : {})
+        },
+        _sum: { amount: true }
       })
     ]);
+    const waivedPaid = Number(waivedBilled._sum.paidAmount ?? 0);
 
     const revenue = round2(
       payments.reduce((sum, p) => sum + Number(p.amount) - Number(p.refundedAmount), 0)
     );
+    const bookRevenue = round2(Number(bookSum._sum.amount ?? 0));
+    const deductions = round2(Number(deductionSum._sum.amount ?? 0));
     const billedTotal = round2(
-      Number(billed._sum.amount ?? 0) - Number(billed._sum.discount ?? 0)
+      Number(billed._sum.amount ?? 0) - Number(billed._sum.discount ?? 0) + waivedPaid
     );
+    const collectedTotal = round2(Number(billed._sum.paidAmount ?? 0) + waivedPaid);
 
     const rows: { key: string; revenue: number }[] = [];
     const bucket = new Map<string, { revenue: number }>();
@@ -139,10 +174,13 @@ export async function GET(request: NextRequest) {
       range: { from: query.from, to: query.to },
       summary: {
         revenue,
+        bookRevenue,
+        deductions,
+        net: round2(revenue + bookRevenue - deductions),
         billed: billedTotal,
-        collected: Number(billed._sum.paidAmount ?? 0),
-        outstanding: round2(billedTotal - Number(billed._sum.paidAmount ?? 0)),
-        collectionRate: collectionRate(Number(billed._sum.paidAmount ?? 0), billedTotal)
+        collected: collectedTotal,
+        outstanding: round2(billedTotal - collectedTotal),
+        collectionRate: collectionRate(collectedTotal, billedTotal)
       },
       byMethod: [...byMethod.entries()].map(([method, amount]) => ({ method, amount })),
       series: rows

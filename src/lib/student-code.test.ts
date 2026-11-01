@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildQrPayload,
   formatStudentCode,
+  formatGradeStudentCode,
+  gradeCodePrefix,
   isNumericStudentCode,
   isStudentCodeConflict,
   yearPrefix
@@ -56,5 +58,24 @@ describe("isStudentCodeConflict", () => {
     expect(isStudentCodeConflict({ code: "P2025" })).toBe(false);
     expect(isStudentCodeConflict(new Error("boom"))).toBe(false);
     expect(isStudentCodeConflict(null)).toBe(false);
+  });
+});
+
+describe("grade based student code", () => {
+  it("maps Arabic and English grade names to 271 / 272 / 273", () => {
+    expect(gradeCodePrefix({ name: "اولي ثانوي" })).toBe("271");
+    expect(gradeCodePrefix({ name: "تانية ثانوي" })).toBe("272");
+    expect(gradeCodePrefix({ name: "تالته ثانوي" })).toBe("273");
+    expect(gradeCodePrefix({ name: "الصف الثالث الثانوي" })).toBe("273");
+    expect(gradeCodePrefix({ name: "Grade 2" })).toBe("272");
+  });
+  it("falls back to the grade order when the name is unclear", () => {
+    expect(gradeCodePrefix({ name: "x", order: 0 })).toBe("271");
+    expect(gradeCodePrefix({ name: "x", order: 2 })).toBe("272");
+  });
+  it("formats prefix + sequence like the existing codes", () => {
+    expect(formatGradeStudentCode("273", 1404)).toBe("2731404");
+    expect(formatGradeStudentCode("271", 1)).toBe("2710001");
+    expect(() => formatGradeStudentCode("260", 1)).toThrow();
   });
 });

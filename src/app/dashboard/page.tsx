@@ -36,6 +36,12 @@ interface Stats {
     todayPaymentsCount: number;
     todayPaymentsAmount: number;
   };
+  treasury?: {
+    year: number;
+    month: number;
+    total: { tuition: number; books: number; income: number; deductions: number; net: number };
+    monthly: { tuition: number; books: number; income: number; deductions: number; net: number };
+  };
   groupCapacity?: {
     id: string;
     name: string;
@@ -146,6 +152,24 @@ export default function DashboardPage() {
               tone="positive"
             />
           </div>
+          {data.treasury && (
+            <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <StatCard
+                label={t("tre.totalBalance")}
+                value={formatMoneyClient(data.treasury.total.net)}
+                hint={`${t("tre.income")} ${formatMoneyClient(data.treasury.total.income)} − ${t("tre.deductions")} ${formatMoneyClient(data.treasury.total.deductions)}`}
+                tone={data.treasury.total.net < 0 ? "negative" : "positive"}
+              />
+              <StatCard
+                label={t("tre.monthIncome")}
+                value={formatMoneyClient(data.treasury.monthly.income)}
+                hint={`${t("tre.tuition")} ${formatMoneyClient(data.treasury.monthly.tuition)} · ${t("tre.books")} ${formatMoneyClient(data.treasury.monthly.books)}`}
+                tone="positive"
+              />
+              <StatCard label={t("tre.monthDeductions")} value={formatMoneyClient(data.treasury.monthly.deductions)} tone={data.treasury.monthly.deductions > 0 ? "warning" : "default"} />
+              <StatCard label={t("tre.monthNet")} value={formatMoneyClient(data.treasury.monthly.net)} tone={data.treasury.monthly.net < 0 ? "negative" : "positive"} />
+            </div>
+          )}
         </section>
       )}
 

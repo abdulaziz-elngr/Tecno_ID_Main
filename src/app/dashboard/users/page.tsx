@@ -21,6 +21,14 @@ interface UserRow {
   lockedUntil: string | null;
   userRoles: { role: { id: string; name: string } }[];
   userBranches: { branch: { id: string; name: string } }[];
+  teacherProfile: { id: string; fullName: string; isAssistant: boolean } | null;
+}
+
+interface StaffOption {
+  id: string;
+  fullName: string;
+  isAssistant: boolean;
+  userId: string | null;
 }
 
 interface RoleRow {
@@ -58,6 +66,7 @@ export default function UsersPage() {
   );
   const { data: roles } = useApi<RoleRow[]>("/api/roles");
   const { data: branches } = useApi<BranchOption[]>("/api/branches");
+  const { data: staff } = useApi<StaffOption[]>(tab === "users" ? "/api/teachers?pageSize=100" : null, [tab]);
 
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRow | null>(null);
@@ -67,10 +76,17 @@ export default function UsersPage() {
   const [uPassword, setUPassword] = useState("");
   const [uRoleIds, setURoleIds] = useState<string[]>([]);
   const [uBranchIds, setUBranchIds] = useState<string[]>([]);
+  const [uTeacherId, setUTeacherId] = useState("");
   const [uIsActive, setUIsActive] = useState(true);
   const [uReason, setUReason] = useState("");
   const [uSubmitting, setUSubmitting] = useState(false);
   const [uError, setUError] = useState<string | null>(null);
+
+  // Teaching roles are limited to the groups of the staff profile they are linked to.
+  const needsStaffProfile = (roles ?? []).some(
+    (r) => uRoleIds.includes(r.id) && (r.name === "TEACHER" || r.name === "TEACHER_ASSISTANT")
+  );
+  const staffOptions = (staff ?? []).filter((s) => !s.userId || s.userId === editingUser?.id);
 
   function openCreateUser() {
     setEditingUser(null);
@@ -80,6 +96,7 @@ export default function UsersPage() {
     setUPassword("");
     setURoleIds([]);
     setUBranchIds([]);
+    setUTeacherId("");
     setUIsActive(true);
     setUReason("");
     setUError(null);
@@ -94,6 +111,7 @@ export default function UsersPage() {
     setUPassword("");
     setURoleIds(user.userRoles.map((r) => r.role.id));
     setUBranchIds(user.userBranches.map((b) => b.branch.id));
+    setUTeacherId(user.teacherProfile?.id ?? "");
     setUIsActive(user.isActive);
     setUReason("");
     setUError(null);
@@ -118,6 +136,7 @@ export default function UsersPage() {
           roleIds: uRoleIds,
           branchIds: uBranchIds,
           newPassword: uPassword.trim() || undefined,
+          teacherId: needsStaffProfile ? uTeacherId || null : null,
           reason: uReason.trim()
         });
         toast.success(t("common.saved"));
@@ -129,7 +148,8 @@ export default function UsersPage() {
           password: uPassword,
           roleIds: uRoleIds,
           branchIds: uBranchIds,
-          isActive: uIsActive
+          isActive: uIsActive,
+          teacherId: needsStaffProfile && uTeacherId ? uTeacherId : undefined
         });
         toast.success(t("common.created"));
       }
@@ -226,13 +246,13 @@ export default function UsersPage() {
     <div className="space-y-5">
       <PageHeader title={t("users.title")} />
 
-      <div className="flex gap-2 border-b border-black/10 dark:border-white/10">
+      <div className="no-scrollbar flex gap-2 overflow-x-auto border-b border-black/10 dark:border-white/10">
         {(["users", "roles", "sessions"] as const).map((tabKey) => (
           <button
             key={tabKey}
             type="button"
             onClick={() => setTab(tabKey)}
-            className={`px-3 py-2 text-sm font-medium ${
+            className={`shrink-0 whitespace-nowrap px-3 py-2 text-sm font-medium ${
               tab === tabKey
                 ? "border-b-2 border-tecno-gold text-tecno-gold-dark dark:text-tecno-gold"
                 : "text-black/55 dark:text-white/55"
@@ -448,6 +468,20 @@ export default function UsersPage() {
               </div>
             )}
           </Field>
+          {needsStaffProfile && (
+            <Field label={t("users.staffProfile")} hint={t("users.staffProfileHint")} required>
+              {(id) => (
+                <select id={id} className="input" value={uTeacherId} onChange={(e) => setUTeacherId(e.target.value)} required>
+                  <option value="">{t("common.select")}</option>
+                  {staffOptions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName} · {s.isAssistant ? t("teachers.assistant") : t("teachers.teacher")}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          )}
           <Field label={t("common.branch")} hint="Leave empty for organization-wide access">
             {() => (
               <div className="flex flex-wrap gap-2">

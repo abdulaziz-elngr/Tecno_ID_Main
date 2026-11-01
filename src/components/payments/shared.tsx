@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useApi } from "@/lib/client";
 import { Badge, Field } from "@/components/ui";
+import { MonthYearPicker } from "@/components/MonthYearPicker";
 import { buildWhatsAppLink } from "@/lib/wa-link";
 import { monthLabel } from "@/lib/subscription-months";
 
@@ -58,17 +60,23 @@ export function PaymentFilters({ value, onChange }: { value: Filters; onChange: 
   const stage = tree?.find((s) => s.id === value.stageId);
   const grade = stage?.grades.find((g) => g.id === value.gradeId);
 
+  // Only one stage → select it right away.
+  useEffect(() => {
+    if (tree && tree.length === 1 && !value.stageId) {
+      onChange({ ...value, stageId: tree[0]!.id, gradeId: "", groupId: "" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree, value.stageId]);
+
   return (
     <div className="card grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
       <Field label={t("pay.month")}>
         {(id) => (
-          <input
+          <MonthYearPicker
             id={id}
-            type="month"
-            className="input"
             value={monthInputValue(value)}
-            onChange={(e) => {
-              const [y, m] = e.target.value.split("-").map(Number);
+            onChange={(v) => {
+              const [y, m] = v.split("-").map(Number);
               if (y && m) onChange({ ...value, year: y, month: m });
             }}
           />

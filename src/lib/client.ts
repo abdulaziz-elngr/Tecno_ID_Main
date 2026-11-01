@@ -35,8 +35,14 @@ export class ApiError extends Error {
 async function parse(response: Response) {
   const body = await response.json().catch(() => ({}) as Record<string, unknown>);
   if (!response.ok) {
+    let message = typeof body.error === "string" ? body.error : "Something went wrong. Please try again.";
+    // Server errors carry a correlation id that is also written to the server
+    // log: showing its first 8 characters lets support find the exact failure.
+    if (response.status >= 500 && typeof body.errorId === "string") {
+      message += ` (ref ${body.errorId.slice(0, 8)})`;
+    }
     throw new ApiError(
-      typeof body.error === "string" ? body.error : "Something went wrong. Please try again.",
+      message,
       response.status,
       body.details,
       typeof body.code === "string" ? body.code : undefined
@@ -45,12 +51,53 @@ async function parse(response: Response) {
   return body;
 }
 
+/**
+ * Identical GETs fired at the same moment (e.g. the overdue-notices banner is
+ * mounted by both the layout and the dashboard page) share ONE network request,
+ * so the server and database do the work once. Any write clears the table so a
+ * reload right after a save can never be served a stale in-flight answer.
+ */
+const inflight = new Map<string, Promise<Record<string, unknown>>>();
+
+function abortError() {
+  return new DOMException("Aborted", "AbortError");
+}
+
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(abortError());
+    signal.addEventListener("abort", () => reject(abortError()), { once: true });
+    promise.then(resolve, reject);
+  });
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A dropped mobile connection / cold start surfaces as a TypeError: retry once. */
+async function fetchJson(url: string): Promise<Record<string, unknown>> {
+  try {
+    return await parse(await fetch(url, { cache: "no-store" }));
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+    await wait(700);
+    return parse(await fetch(url, { cache: "no-store" }));
+  }
+}
+
 export async function apiGet<T>(url: string, signal?: AbortSignal): Promise<{ data: T; pagination?: Pagination }> {
-  const body = await parse(await fetch(url, { signal, cache: "no-store" }));
+  let shared = inflight.get(url);
+  if (!shared) {
+    shared = fetchJson(url).finally(() => {
+      if (inflight.get(url) === shared) inflight.delete(url);
+    });
+    inflight.set(url, shared);
+  }
+  const body = await (signal ? raceAbort(shared, signal) : shared);
   return body as { data: T; pagination?: Pagination };
 }
 
 async function send<T>(method: string, url: string, payload?: unknown): Promise<T> {
+  inflight.clear();
   const body = await parse(
     await fetch(url, {
       method,

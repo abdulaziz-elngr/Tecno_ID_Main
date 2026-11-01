@@ -28,6 +28,19 @@ export function resolveFeeState(
 }
 
 /**
+ * A student who is exempt from monthly fees for that month owes nothing, even
+ * when no subscription row exists yet (which would otherwise read as
+ * NOT_BILLED and flag the student as unpaid). A genuinely PAID month stays PAID.
+ */
+export function applyFeeExemption(
+  fee: { state: FeeState; remaining: number },
+  exemptThisMonth: boolean
+): { state: FeeState; remaining: number } {
+  if (!exemptThisMonth || fee.state === "PAID") return fee;
+  return { state: "WAIVED", remaining: 0 };
+}
+
+/**
  * "Has not paid the month's fees". PAID and WAIVED are settled; everything
  * else — including a month with no subscription at all — is reported so the
  * front desk can follow up.

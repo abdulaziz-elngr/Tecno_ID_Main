@@ -67,7 +67,14 @@ interface FakeGroup {
 
 const NAMES: Record<string, string> = { t1: "Teacher One", t2: "Teacher Two", a1: "Assistant One" };
 
-function makeClient(groups: FakeGroup[]) {
+interface FakeLink {
+  groupId: string;
+  teacherId: string;
+  seq: number;
+}
+
+function makeClient(groups: FakeGroup[], links: FakeLink[] = []) {
+  let seq = links.reduce((m, l) => Math.max(m, l.seq), 0);
   type Where = Record<string, unknown>;
   const matches = (g: FakeGroup, where: Where): boolean => {
     for (const [key, cond] of Object.entries(where)) {
@@ -97,8 +104,40 @@ function makeClient(groups: FakeGroup[]) {
     schedules: g.schedules
   });
 
+  const linkMatches = (l: FakeLink, where: { teacherId?: string; groupId?: string | { in: string[] }; group?: { deletedAt: null } }) => {
+    if (where.teacherId !== undefined && l.teacherId !== where.teacherId) return false;
+    if (typeof where.groupId === "string" && l.groupId !== where.groupId) return false;
+    if (where.groupId && typeof where.groupId === "object" && !where.groupId.in.includes(l.groupId)) return false;
+    if (where.group && groups.find((g) => g.id === l.groupId)?.deletedAt) return false;
+    return true;
+  };
+
   const client = {
+    groupAssistant: {
+      findMany: async ({ where }: { where: Parameters<typeof linkMatches>[1] }) =>
+        links.filter((l) => linkMatches(l, where)).map((l) => ({ groupId: l.groupId, teacherId: l.teacherId })),
+      findFirst: async ({ where }: { where: { groupId: string } }) => {
+        const first = links.filter((l) => l.groupId === where.groupId).sort((a, b) => a.seq - b.seq)[0];
+        return first ? { teacherId: first.teacherId } : null;
+      },
+      deleteMany: async ({ where }: { where: Parameters<typeof linkMatches>[1] }) => {
+        const hit = links.filter((l) => linkMatches(l, where));
+        for (const l of hit) links.splice(links.indexOf(l), 1);
+        return { count: hit.length };
+      },
+      createMany: async ({ data }: { data: { groupId: string; teacherId: string }[] }) => {
+        for (const d of data) {
+          if (!links.some((l) => l.groupId === d.groupId && l.teacherId === d.teacherId)) links.push({ ...d, seq: (seq += 1) });
+        }
+        return { count: data.length };
+      }
+    },
     group: {
+      update: async ({ where, data }: { where: { id: string }; data: Partial<Pick<FakeGroup, "teacherId" | "assistantId">> }) => {
+        const g = groups.find((x) => x.id === where.id)!;
+        Object.assign(g, data);
+        return g;
+      },
       findMany: async ({ where }: { where: Where }) => groups.filter((g) => matches(g, where)).map(project),
       updateMany: async ({ where, data }: { where: Where; data: Partial<Pick<FakeGroup, "teacherId" | "assistantId">> }) => {
         const hit = groups.filter((g) => matches(g, where));
@@ -217,15 +256,39 @@ describe("planStaffGroupSync + applyStaffGroupPlan", () => {
     expect(plan.toAdd).toEqual([]);
   });
 
-  it("assistants use assistantId and never touch teacherId", async () => {
+  it("assistants join through GroupAssistant and never touch teacherId", async () => {
     const groups = seed();
+    const links: FakeLink[] = [];
     const assistant = { id: "a1", branchId: BRANCH, isAssistant: true };
-    const tx = makeClient(groups);
+    const tx = makeClient(groups, links);
     const plan = await planStaffGroupSync(tx, { organizationId: ORG, staff: assistant, groupIds: ["g2"], allowReassign: false });
     expect(plan.field).toBe("assistantId");
     await applyStaffGroupPlan(tx, "a1", plan);
-    expect(owned(groups, "a1", "assistantId")).toEqual(["g2"]);
+    expect(links.map((l) => [l.groupId, l.teacherId])).toEqual([["g2", "a1"]]);
+    expect(owned(groups, "a1", "assistantId")).toEqual(["g2"]); // mirror of the first assistant
     expect(groups.find((g) => g.id === "g2")?.teacherId).toBe("t1"); // the teacher keeps the group
+  });
+
+  it("several assistants can share one group without a takeover; the mirror follows the first", async () => {
+    const groups = seed();
+    const links: FakeLink[] = [];
+    const a1 = { id: "a1", branchId: BRANCH, isAssistant: true };
+    const a2 = { id: "a2", branchId: BRANCH, isAssistant: true };
+    const tx = makeClient(groups, links);
+
+    await applyStaffGroupPlan(tx, "a1", await planStaffGroupSync(tx, { organizationId: ORG, staff: a1, groupIds: ["g1"], allowReassign: false }));
+    // a2 joins the SAME group: allowed even though a1 already is its assistant.
+    const plan2 = await planStaffGroupSync(tx, { organizationId: ORG, staff: a2, groupIds: ["g1"], allowReassign: false });
+    expect(plan2.takeovers).toEqual([]);
+    await applyStaffGroupPlan(tx, "a2", plan2);
+    expect(links.filter((l) => l.groupId === "g1").map((l) => l.teacherId).sort()).toEqual(["a1", "a2"]);
+    expect(groups.find((g) => g.id === "g1")?.assistantId).toBe("a1");
+
+    // The first assistant leaves: the other one stays and becomes the mirror.
+    const leave = await planStaffGroupSync(tx, { organizationId: ORG, staff: a1, groupIds: [], allowReassign: false });
+    await applyStaffGroupPlan(tx, "a1", leave);
+    expect(links.map((l) => l.teacherId)).toEqual(["a2"]);
+    expect(groups.find((g) => g.id === "g1")?.assistantId).toBe("a2");
   });
 });
 
@@ -236,5 +299,19 @@ describe("releaseStaffGroups", () => {
     const freed = await releaseStaffGroups(tx, { id: "t1", isAssistant: false });
     expect(freed.sort()).toEqual(["g2", "g3"]);
     expect(owned(groups, "t1")).toEqual([]);
+  });
+
+  it("deleting an assistant only removes him: co-assistants keep the group", async () => {
+    const groups = seed();
+    groups.find((g) => g.id === "g1")!.assistantId = "a1";
+    const links: FakeLink[] = [
+      { groupId: "g1", teacherId: "a1", seq: 1 },
+      { groupId: "g1", teacherId: "a2", seq: 2 }
+    ];
+    const tx = makeClient(groups, links);
+    const freed = await releaseStaffGroups(tx, { id: "a1", isAssistant: true });
+    expect(freed).toEqual(["g1"]);
+    expect(links.map((l) => l.teacherId)).toEqual(["a2"]);
+    expect(groups.find((g) => g.id === "g1")?.assistantId).toBe("a2");
   });
 });

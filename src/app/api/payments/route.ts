@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
 
     const student = await db.student.findFirst({
       where: { id: input.studentId, organizationId: ctx.organizationId, deletedAt: null },
-      select: { id: true, fullName: true, branchId: true }
+      select: { id: true, fullName: true, branchId: true, feeExempt: true }
     });
     if (!student) throw new BusinessRuleError("Student not found.", { status: 404 });
     resolveBranchScope(ctx, student.branchId);
@@ -157,6 +157,15 @@ export async function POST(request: NextRequest) {
       if (allOwing.slice(firstSkipped).some((r) => chosen.has(r.id))) {
         throw new BusinessRuleError("A previous month is still unpaid.", { status: 409, code: "OUT_OF_ORDER" });
       }
+    }
+
+    // An exempt student owes nothing: refuse to take money that would only sit
+    // as an unallocated credit and distort the books.
+    if (student.feeExempt && outstanding.length === 0) {
+      throw new BusinessRuleError("This student is exempt from monthly fees. No payment is due.", {
+        status: 409,
+        code: "FEE_EXEMPT"
+      });
     }
 
     const targets = outstanding.map((s) => ({

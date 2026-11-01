@@ -1,11 +1,11 @@
 import { db } from "@/lib/db";
-import { requirePermission, resolveBranchScope } from "@/lib/rbac";
+import { requireAnyPermission, resolveBranchScope } from "@/lib/rbac";
 import { handleApiError, ok } from "@/lib/api";
 
-/** Stage -> Grade -> Group tree for the payment screens (needs only payments.view). */
+/** Stage -> Grade -> Group tree for the payment screens (payments.view, books.view or deductions.view). */
 export async function GET() {
   try {
-    const ctx = await requirePermission("payments.view");
+    const ctx = await requireAnyPermission(["payments.view", "books.view", "deductions.view"]);
     const branchIds = resolveBranchScope(ctx, undefined);
     const stages = await db.stage.findMany({
       where: { organizationId: ctx.organizationId, isActive: true },

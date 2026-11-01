@@ -6,6 +6,7 @@ import { hasDictKey, useI18n } from "@/lib/i18n";
 import { apiPost, currentMonth, formatDateTime, qs, useApi } from "@/lib/client";
 import { fmt, formatLessonDate, formatTimeRange, localizeError, monthLabel, parseMonthInput, weekdayLabel } from "@/lib/lesson-format";
 import { currentLesson, nextLesson } from "@/lib/lesson-flow";
+import { MonthYearPicker } from "@/components/MonthYearPicker";
 import { Badge, ConfirmDialog, ErrorNotice, Field, PageHeader, useToast } from "@/components/ui";
 import { GroupPicker } from "@/components/GroupPicker";
 import { CameraScanner } from "@/components/CameraScanner";
@@ -184,7 +185,7 @@ export default function ScannerPage() {
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => {
-      fetch(`/api/search?q=${encodeURIComponent(term)}`, { signal: controller.signal })
+      fetch(`/api/search?q=${encodeURIComponent(term)}&scope=students&limit=8`, { signal: controller.signal })
         .then((r) => r.json())
         .then((body) => setManualResults(body.data?.students ?? []))
         .catch(() => {});
@@ -219,6 +220,21 @@ export default function ScannerPage() {
   useEffect(() => {
     if (isOpen && mode === "SCAN") refocus();
   }, [refocus, sessionId, isOpen, mode]);
+
+  // Scanner guns just "type". If focus drifted anywhere that is not a text field
+  // (a button, the page body), send the keystroke to the scan box instead.
+  useEffect(() => {
+    if (!isOpen || mode !== "SCAN" || cameraOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      if (e.key.length === 1 || e.key === "Enter") inputRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isOpen, mode, cameraOpen]);
 
   async function runScan(scanCode: string, confirmMakeUp: boolean) {
     setBusy(true);
@@ -275,6 +291,12 @@ export default function ScannerPage() {
 
   const accepted = result?.status === "ACCEPTED";
   const needsConfirmation = result?.status === "NEEDS_CONFIRMATION";
+
+  // After a scan finishes (or a make-up prompt is answered) the box is editable again:
+  // give it focus right away so the next barcode lands in it with no click.
+  useEffect(() => {
+    if (isOpen && mode === "SCAN" && !busy && !needsConfirmation) refocus();
+  }, [busy, needsConfirmation]); // eslint-disable-line react-hooks/exhaustive-deps
   const codeText = (c: string, fallback: string) => {
     const key = `scanner.code.${c}`;
     return hasDictKey(key) ? t(key as Parameters<typeof t>[0]) : fallback;
@@ -288,13 +310,11 @@ export default function ScannerPage() {
         <div className="max-w-xs">
           <Field label={t("lf.month")} required>
             {(id) => (
-              <input
+              <MonthYearPicker
                 id={id}
-                type="month"
-                className="input"
                 value={monthValue}
-                onChange={(e) => {
-                  setMonthValue(e.target.value);
+                onChange={(v) => {
+                  setMonthValue(v);
                   setSessionId("");
                 }}
               />
@@ -372,7 +392,7 @@ export default function ScannerPage() {
                   <p className="text-sm text-black/65 dark:text-white/65">
                     {formatTimeRange(selected.startMinutes, selected.endMinutes, locale)} · {selected._count.attendances} / {selected.group.capacity}
                   </p>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {selected.status === "SCHEDULED" && (
                       <button type="button" className="btn-primary" disabled={lifecycleBusy} onClick={openSelected}>
                         {lifecycleBusy ? t("common.loading") : t("lesson.open")}
@@ -427,7 +447,9 @@ export default function ScannerPage() {
                       autoComplete="off"
                       autoFocus
                       inputMode="text"
-                      disabled={busy || needsConfirmation}
+                      // readOnly (NOT disabled): a disabled input drops focus, which forced the
+                      // operator to click the box again after every scan.
+                      readOnly={busy || needsConfirmation}
                       onChange={(e) => setCode(e.target.value)}
                       onBlur={() => {
                         if (!cameraOpen) setTimeout(refocus, 80);

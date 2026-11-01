@@ -4,6 +4,9 @@ import { handleApiError, ok } from "@/lib/api";
 import { loadLedgerEnv, loadLedgers } from "@/lib/payment-ledger";
 import { monthLabel, overdueMonths } from "@/lib/subscription-months";
 
+/** These routes build a ledger for every student; give them room on serverless. */
+export const maxDuration = 30;
+
 /**
  * "Monthly Subscription Unpaid" notices. Computed live from the ledger, so a
  * notice stays visible exactly as long as the month is unpaid and disappears
